@@ -1,0 +1,638 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . "/security.php";
+require_once __DIR__ . "/db.php";
+
+require_authenticated_user();
+$userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
+$transactionIdInput = $_GET["id"] ?? null;
+$transactionId = is_string($transactionIdInput)
+    && preg_match('/\A[1-9][0-9]*\z/', $transactionIdInput) === 1
+        ? filter_var($transactionIdInput, FILTER_VALIDATE_INT)
+        : false;
+if ($userId === false || $userId === null || $userId <= 0 || $transactionId === false || $transactionId === null) {
+    http_response_code(404);
+    exit("Exchange transaction not found.");
+}
+
+$transactionColumns = [];
+if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === "sqlite") {
+    $transactionColumns = array_column(
+        $pdo->query('PRAGMA table_info("exchange_transactions")')->fetchAll(PDO::FETCH_ASSOC),
+        "name"
+    );
+}
+$paymentMethodSelect = in_array("payment_method", $transactionColumns, true)
+    ? "exchange_transactions.payment_method"
+    : "NULL AS payment_method";
+
+try {
+    $stmt = $pdo->prepare(
+        "SELECT exchange_transactions.id, exchange_transactions.offer_id,
+                exchange_transactions.creator_id, exchange_transactions.recipient_id,
+                exchange_transactions.cash_amount_minor, exchange_transactions.cash_currency,
+                exchange_transactions.currency_exponent, {$paymentMethodSelect},
+                exchange_transactions.payment_status, exchange_transactions.status,
+                exchange_transactions.created_at,
+                chat_rooms.id AS chat_room_id,
+                creator.name AS creator_name, recipient.name AS recipient_name
+         FROM exchange_transactions
+         LEFT JOIN chat_rooms
+           ON chat_rooms.exchange_transaction_id = exchange_transactions.id
+         INNER JOIN users AS creator ON creator.id = exchange_transactions.creator_id
+         INNER JOIN users AS recipient ON recipient.id = exchange_transactions.recipient_id
+         WHERE exchange_transactions.id = :id
+           AND (
+                exchange_transactions.creator_id = :creator_user_id
+                OR exchange_transactions.recipient_id = :recipient_user_id
+           )
+         LIMIT 1"
+    );
+    $stmt->execute([
+        "id" => $transactionId,
+        "creator_user_id" => $userId,
+        "recipient_user_id" => $userId
+    ]);
+    $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Exchange transaction lookup failed (code: {$e->getCode()}).");
+    http_response_code(503);
+    exit("Exchange transaction details are temporarily unavailable.");
+}
+
+if ($transaction === false) {
+    http_response_code(404);
+    exit("Exchange transaction not found.");
+}
+
+$escape = static fn ($value): string => htmlspecialchars(
+    (string) $value,
+    ENT_QUOTES | ENT_SUBSTITUTE,
+    "UTF-8"
+);
+$transactionStatuses = [
+    "in_progress" => "In progress",
+    "disputed" => "Disputed",
+    "completed" => "Completed",
+    "cancelled" => "Cancelled"
+];
+$paymentStatuses = [
+    "not_required" => "Not required",
+    "awaiting_method" => "Awaiting payment method",
+    "awaiting_payment" => "Awaiting payment",
+    "submitted" => "Submitted for review",
+    "verified" => "Verified",
+    "rejected" => "Rejected"
+];
+$paymentMethods = [
+    "promptpay" => "PromptPay",
+    "bank_transfer" => "Bank transfer",
+    "cash_on_handover" => "Cash on handover"
+];
+$cashDescription = (int) $transaction["cash_amount_minor"] === 0
+    ? "No cash payment required"
+    : (string) $transaction["cash_amount_minor"] . " "
+        . (string) $transaction["cash_currency"] . " minor units (paid by the offer creator)";
+
+try {
+    $schemaObjects = $pdo->query(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name IN ('payment_evidence', 'transaction_disputes')"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    if (count($schemaObjects) === 1) {
+        throw new RuntimeException("Payment migration schema is incomplete.");
+    }
+    $paymentSchemaAvailable = count($schemaObjects) === 2;
+    $paymentEvidence = [];
+    $disputes = [];
+    if ($paymentSchemaAvailable) {
+        $evidenceStmt = $pdo->prepare(
+        "SELECT payment_evidence.id, payment_evidence.payment_method,
+                payment_evidence.amount_minor, payment_evidence.currency,
+                payment_evidence.currency_exponent, payment_evidence.status,
+                payment_evidence.submitted_at, payment_evidence.verified_at,
+                payment_evidence.review_note, submitter.name AS submitter_name,
+                verifier.name AS verifier_name
+         FROM payment_evidence
+         INNER JOIN users AS submitter ON submitter.id = payment_evidence.submitted_by
+         LEFT JOIN users AS verifier ON verifier.id = payment_evidence.verified_by
+         WHERE payment_evidence.transaction_id = :transaction_id
+         ORDER BY payment_evidence.id ASC"
+        );
+        $evidenceStmt->execute(["transaction_id" => (int) $transaction["id"]]);
+        $paymentEvidence = $evidenceStmt->fetchAll(PDO::FETCH_ASSOC);
+        $disputeStmt = $pdo->prepare(
+        "SELECT transaction_disputes.id, transaction_disputes.reported_by,
+                transaction_disputes.reason, transaction_disputes.reported_at,
+                transaction_disputes.resolved_by, transaction_disputes.resolution,
+                transaction_disputes.resolution_reason, transaction_disputes.resolved_at,
+                reporter.name AS reporter_name, resolver.name AS resolver_name
+         FROM transaction_disputes
+         INNER JOIN users AS reporter ON reporter.id = transaction_disputes.reported_by
+         LEFT JOIN users AS resolver ON resolver.id = transaction_disputes.resolved_by
+         WHERE transaction_disputes.transaction_id = :transaction_id
+         ORDER BY transaction_disputes.id ASC"
+        );
+        $disputeStmt->execute(["transaction_id" => (int) $transaction["id"]]);
+        $disputes = $disputeStmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    $handoverSchemaAvailable = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === "sqlite"
+        && $pdo->query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'handover_confirmations'"
+        )->fetchColumn() !== false;
+    $handoverConfirmations = [];
+    if ($handoverSchemaAvailable) {
+        $handoverStmt = $pdo->prepare(
+            "SELECT handover_confirmations.confirmation_type,
+                    handover_confirmations.confirmer_id,
+                    handover_confirmations.confirmed_at,
+                    confirmer.name AS confirmer_name
+             FROM handover_confirmations
+             INNER JOIN users AS confirmer ON confirmer.id = handover_confirmations.confirmer_id
+             WHERE handover_confirmations.transaction_id = :transaction_id
+             ORDER BY handover_confirmations.confirmation_type"
+        );
+        $handoverStmt->execute(["transaction_id" => (int) $transaction["id"]]);
+        $handoverConfirmations = $handoverStmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (PDOException $e) {
+    error_log("Exchange transaction payment history lookup failed (code: {$e->getCode()}).");
+    http_response_code(503);
+    exit("Payment evidence is temporarily unavailable.");
+}
+
+$formatAmount = static function (int $minor, int $exponent): string {
+    if ($exponent === 0) {
+        return (string) $minor;
+    }
+    $base = 10 ** $exponent;
+    return intdiv($minor, $base) . "." . str_pad((string) ($minor % $base), $exponent, "0", STR_PAD_LEFT);
+};
+$isCreator = (int) $transaction["creator_id"] === $userId;
+$isRecipient = (int) $transaction["recipient_id"] === $userId;
+$handoverConfirmationLabels = [
+    "creator_handed_over_offered_item" => [
+        "label" => "Creator handed over the offered item",
+        "participant" => "creator"
+    ],
+    "recipient_received_offered_item" => [
+        "label" => "Recipient received the offered item",
+        "participant" => "recipient"
+    ],
+    "recipient_handed_over_requested_item" => [
+        "label" => "Recipient handed over the requested item",
+        "participant" => "recipient"
+    ],
+    "creator_received_requested_item" => [
+        "label" => "Creator received the requested item",
+        "participant" => "creator"
+    ]
+];
+$handoverConfirmationsByType = [];
+foreach ($handoverConfirmations as $handoverConfirmation) {
+    $handoverConfirmationsByType[$handoverConfirmation["confirmation_type"]] = $handoverConfirmation;
+}
+$isPositivePayment = (int) $transaction["cash_amount_minor"] > 0;
+$paymentStatusLabel = $paymentStatuses[$transaction["payment_status"]] ?? "Unknown";
+if ($transaction["status"] === "disputed") {
+    $paymentStatusLabel = "Disputed - payment is not considered complete";
+} elseif ($transaction["status"] === "cancelled") {
+    $paymentStatusLabel = "Cancelled - payment is not considered complete";
+} elseif (
+    $transaction["payment_method"] === "cash_on_handover"
+    && $transaction["payment_status"] === "submitted"
+) {
+    $paymentStatusLabel = "Awaiting recipient receipt confirmation";
+} elseif (
+    $transaction["payment_method"] === "cash_on_handover"
+    && $transaction["payment_status"] === "verified"
+) {
+    $paymentStatusLabel = "Receipt confirmed by recipient";
+}
+$currencyFields = [
+    "amount_minor" => (string) $transaction["cash_amount_minor"],
+    "currency" => (string) $transaction["cash_currency"],
+    "currency_exponent" => (string) $transaction["currency_exponent"]
+];
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exchange transaction | Buy &amp; Exchange</title>
+    <style>
+    * { box-sizing: border-box; }
+    body { max-width: 760px; margin: 32px auto; padding: 16px; background: #fffaf5; color: #24211f; font: 16px/1.5 Arial, sans-serif; }
+    main { padding: 24px; border: 1px solid #eee5de; border-radius: 12px; background: #fff; }
+    .notice { padding: 12px; border-radius: 8px; background: #fff5f2; color: #7b4e2f; }
+    .chat { margin-top: 28px; border: 1px solid #e8dfd8; border-radius: 12px; overflow: hidden; }
+    .chat header { padding: 16px; background: #f8f3ee; }
+    .chat h2, .chat header p { margin: 0; }
+    .chat header p { margin-top: 4px; color: #625a54; }
+    .messages { min-height: 180px; max-height: 420px; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .message { max-width: 85%; padding: 10px 12px; border-radius: 12px; background: #f2efec; overflow-wrap: anywhere; }
+    .message.own { align-self: flex-end; background: #e8f2e8; }
+    .message p { margin: 0; white-space: pre-wrap; }
+    .message small { display: block; margin-top: 5px; color: #625a54; font-size: 0.78rem; }
+    .chat-state { padding: 12px 16px; color: #625a54; }
+    .chat-state.error { color: #a12622; }
+    .chat-form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e8dfd8; }
+    .chat-form textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 140px; resize: vertical; padding: 10px; font: inherit; }
+    .chat-form button, .chat-retry { padding: 10px 16px; border: 0; border-radius: 8px; background: #315d3b; color: white; font: inherit; cursor: pointer; }
+    .chat-form button:disabled, .chat-form textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+    .payment-panel, .dispute-panel, .handover-panel { margin-top: 24px; padding: 16px; border: 1px solid #e8dfd8; border-radius: 10px; }
+    .transaction-action-form { display: grid; gap: 8px; margin: 12px 0; }
+    .transaction-action-form textarea, .transaction-action-form select, .transaction-action-form input { max-width: 100%; padding: 8px; font: inherit; }
+    .transaction-action-form button { justify-self: start; padding: 9px 14px; border: 0; border-radius: 7px; background: #315d3b; color: white; font: inherit; cursor: pointer; }
+    .action-state { min-height: 1.5em; color: #7b4e2f; }
+    .evidence-entry, .dispute-entry { margin: 12px 0; padding: 12px; border: 1px solid #eee5de; border-radius: 8px; }
+    .evidence-entry p, .dispute-entry p { margin: 4px 0; }
+    @media (max-width: 520px) {
+        body { margin: 0 auto; padding: 10px; }
+        main { padding: 16px; }
+        .chat-form { flex-direction: column; }
+        .chat-form button { min-height: 44px; }
+    }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Exchange transaction</h1>
+    <p>Transaction status: <?= $escape($transactionStatuses[$transaction["status"]] ?? "Unknown") ?></p>
+    <p>Payment status: <?= $escape($paymentStatusLabel) ?></p>
+    <p>Cash difference: <?= $escape($cashDescription) ?></p>
+    <p>Accepted <?= $escape($transaction["created_at"]) ?></p>
+    <p>Participants: <?= $escape($transaction["creator_name"]) ?> and <?= $escape($transaction["recipient_name"]) ?></p>
+    <p class="notice">Offer acceptance is agreement only. Product ownership has not changed. Any future ownership transfer requires completion of the applicable payment and handover requirements.</p>
+    <section class="handover-panel" aria-labelledby="handover-title">
+        <h2 id="handover-title">Product handover confirmations</h2>
+        <p>These confirmations record product handover only. They are separate from payment verification and do not complete the transaction or transfer ownership.</p>
+        <?php if (!$handoverSchemaAvailable): ?>
+            <p class="notice">Handover confirmations are unavailable until the v6 migration is installed.</p>
+        <?php else: ?>
+            <?php foreach ($handoverConfirmationLabels as $type => $details): ?>
+                <?php $record = $handoverConfirmationsByType[$type] ?? null; ?>
+                <article class="evidence-entry">
+                    <p><strong><?= $escape($details["label"]) ?>:</strong>
+                        <?php if ($record !== null): ?>
+                            Confirmed by <?= $escape($record["confirmer_name"]) ?>
+                            at <?= $escape($record["confirmed_at"]) ?>
+                        <?php else: ?>
+                            Awaiting confirmation
+                        <?php endif; ?>
+                    </p>
+                    <?php if (
+                        $record === null
+                        && $transaction["status"] === "in_progress"
+                        && (($details["participant"] === "creator" && $isCreator)
+                            || ($details["participant"] === "recipient" && $isRecipient))
+                    ): ?>
+                        <form class="transaction-action-form" method="post" action="handover_action.php">
+                            <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                            <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                            <input type="hidden" name="confirmation_type" value="<?= $escape($type) ?>">
+                            <button type="submit">Confirm handover</button>
+                        </form>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+            <?php if ($transaction["status"] === "disputed"): ?>
+                <p class="notice">New handover confirmations are unavailable while this transaction is disputed.</p>
+            <?php elseif (in_array($transaction["status"], ["completed", "cancelled"], true)): ?>
+                <p class="notice">This transaction is terminal; no new handover confirmations can be added.</p>
+            <?php endif; ?>
+            <p class="action-state" aria-live="polite"></p>
+        <?php endif; ?>
+    </section>
+    <section class="payment-panel" aria-labelledby="payment-title">
+        <h2 id="payment-title">Payment evidence</h2>
+        <?php if ($isPositivePayment): ?>
+            <p>Amount: <?= $escape($formatAmount((int) $transaction["cash_amount_minor"], (int) $transaction["currency_exponent"])) ?> <?= $escape($transaction["cash_currency"]) ?></p>
+            <p>Payment method: <?= $escape($paymentMethods[$transaction["payment_method"]] ?? "Not selected") ?></p>
+            <p>Payment status: <?= $escape($paymentStatusLabel) ?></p>
+        <?php else: ?>
+            <p>No payment method or evidence is required for a zero cash difference.</p>
+        <?php endif; ?>
+
+        <?php if ($transaction["status"] === "disputed"): ?>
+            <p class="notice">Payment actions are blocked while this transaction is disputed.</p>
+        <?php elseif ($paymentSchemaAvailable && $transaction["status"] === "in_progress" && $isCreator && $isPositivePayment && $transaction["payment_status"] === "awaiting_method"): ?>
+            <form class="transaction-action-form" method="post" action="payment_action.php">
+                <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                <input type="hidden" name="action" value="select_method">
+                <label for="payment-method">Choose a payment method</label>
+                <select id="payment-method" name="payment_method" required>
+                    <option value="">Select one</option>
+                    <option value="promptpay">PromptPay</option>
+                    <option value="bank_transfer">Bank transfer</option>
+                    <option value="cash_on_handover">Cash on handover</option>
+                </select>
+                <button type="submit">Save payment method</button>
+            </form>
+        <?php elseif (
+            $transaction["status"] === "in_progress"
+            && $paymentSchemaAvailable
+            && $isCreator
+            && $isPositivePayment
+            && $transaction["payment_method"] === "cash_on_handover"
+            && in_array($transaction["payment_status"], ["awaiting_payment", "rejected"], true)
+        ): ?>
+            <p>Marking cash paid submits your statement only; the recipient must separately confirm receipt.</p>
+            <form class="transaction-action-form" method="post" action="payment_action.php">
+                <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                <input type="hidden" name="action" value="cash_paid">
+                <?php foreach ($currencyFields as $name => $value): ?>
+                    <input type="hidden" name="<?= $escape($name) ?>" value="<?= $escape($value) ?>">
+                <?php endforeach; ?>
+                <button type="submit">I paid cash</button>
+            </form>
+        <?php elseif (
+            $transaction["status"] === "in_progress"
+            && $paymentSchemaAvailable
+            && $isCreator
+            && $isPositivePayment
+            && in_array($transaction["payment_method"], ["promptpay", "bank_transfer"], true)
+            && in_array($transaction["payment_status"], ["awaiting_payment", "rejected"], true)
+        ): ?>
+            <form class="transaction-action-form" method="post" action="payment_action.php" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                <input type="hidden" name="action" value="submit_evidence">
+                <?php foreach ($currencyFields as $name => $value): ?>
+                    <input type="hidden" name="<?= $escape($name) ?>" value="<?= $escape($value) ?>">
+                <?php endforeach; ?>
+                <label for="evidence-file">Payment slip (JPEG, PNG, or PDF; maximum 5 MB)</label>
+                <input id="evidence-file" type="file" name="evidence_file" accept="image/jpeg,image/png,application/pdf" required>
+                <button type="submit"><?= $transaction["payment_status"] === "rejected" ? "Resubmit payment slip" : "Submit payment slip" ?></button>
+            </form>
+        <?php endif; ?>
+
+        <?php if ($paymentEvidence === []): ?>
+            <p>No payment evidence has been submitted.</p>
+        <?php else: ?>
+            <h3>Submission history</h3>
+            <?php foreach ($paymentEvidence as $evidence): ?>
+                <?php
+                $evidenceStatusLabel = ucfirst($evidence["status"]);
+                if ($transaction["status"] === "disputed") {
+                    $evidenceStatusLabel = $evidence["status"] === "verified"
+                        ? "Recorded as verified before dispute; payment is not considered complete"
+                        : "Payment is blocked by the dispute; prior record: " . $evidence["status"];
+                } elseif ($transaction["status"] === "cancelled") {
+                    $evidenceStatusLabel = "Transaction cancelled; prior record: " . $evidence["status"];
+                } elseif ($evidence["payment_method"] === "cash_on_handover") {
+                    $evidenceStatusLabel = match ($evidence["status"]) {
+                        "submitted" => "Awaiting recipient receipt confirmation",
+                        "verified" => "Receipt confirmed by recipient",
+                        "rejected" => "Receipt denied by recipient",
+                        default => ucfirst($evidence["status"])
+                    };
+                }
+                ?>
+                <article class="evidence-entry">
+                    <p><strong><?= $escape($paymentMethods[$evidence["payment_method"]] ?? $evidence["payment_method"]) ?></strong> ·
+                        <?= $escape($formatAmount((int) $evidence["amount_minor"], (int) $evidence["currency_exponent"])) ?>
+                        <?= $escape($evidence["currency"]) ?> · <?= $escape($evidenceStatusLabel) ?></p>
+                    <p>Submitted by <?= $escape($evidence["submitter_name"]) ?> at <?= $escape($evidence["submitted_at"]) ?></p>
+                    <?php if ($evidence["payment_method"] !== "cash_on_handover"): ?>
+                        <p><a href="payment_evidence.php?id=<?= (int) $evidence["id"] ?>">Download payment evidence</a></p>
+                    <?php endif; ?>
+                    <?php if ($evidence["verified_at"] !== null): ?>
+                        <p><?= $evidence["payment_method"] === "cash_on_handover"
+                                ? ($evidence["status"] === "verified" ? "Receipt confirmed by" : "Receipt denied by")
+                                : "Reviewed by" ?> <?= $escape($evidence["verifier_name"]) ?> at <?= $escape($evidence["verified_at"]) ?></p>
+                    <?php endif; ?>
+                    <?php if ($evidence["review_note"] !== null): ?>
+                        <p>Rejection reason: <?= $escape($evidence["review_note"]) ?></p>
+                    <?php endif; ?>
+                    <?php if (
+                        $isRecipient
+                        && $paymentSchemaAvailable
+                        && $transaction["status"] === "in_progress"
+                        && $transaction["payment_status"] === "submitted"
+                        && $evidence["status"] === "submitted"
+                    ): ?>
+                        <form class="transaction-action-form" method="post" action="payment_action.php">
+                            <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                            <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                            <input type="hidden" name="evidence_id" value="<?= (int) $evidence["id"] ?>">
+                            <button type="submit" name="action" value="verify">
+                                <?= $evidence["payment_method"] === "cash_on_handover" ? "Confirm cash receipt" : "Verify payment" ?>
+                            </button>
+                            <label for="review-note-<?= (int) $evidence["id"] ?>">Reason if rejecting</label>
+                            <textarea id="review-note-<?= (int) $evidence["id"] ?>" name="review_note" maxlength="2000" rows="2"></textarea>
+                            <button type="submit" name="action" value="reject">
+                                <?= $evidence["payment_method"] === "cash_on_handover" ? "Deny cash receipt" : "Reject payment" ?>
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+        <?php endif; ?>
+        <p class="action-state" aria-live="polite"></p>
+    </section>
+
+    <section class="dispute-panel" aria-labelledby="dispute-title">
+        <h2 id="dispute-title">Dispute history</h2>
+        <?php if ($paymentSchemaAvailable && $transaction["status"] === "in_progress"): ?>
+            <form class="transaction-action-form" method="post" action="dispute_action.php">
+                <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
+                <input type="hidden" name="transaction_id" value="<?= (int) $transaction["id"] ?>">
+                <label for="dispute-reason">Report a dispute</label>
+                <textarea id="dispute-reason" name="reason" maxlength="2000" rows="3" required></textarea>
+                <button type="submit">Report dispute</button>
+            </form>
+        <?php endif; ?>
+        <?php if ($disputes === []): ?>
+            <p>No disputes have been reported.</p>
+        <?php else: ?>
+            <?php foreach ($disputes as $dispute): ?>
+                <article class="dispute-entry">
+                    <p>Reported by <?= $escape($dispute["reporter_name"]) ?> at <?= $escape($dispute["reported_at"]) ?></p>
+                    <p>Reason: <?= $escape($dispute["reason"]) ?></p>
+                    <?php if ($dispute["resolved_at"] !== null): ?>
+                        <p>Decision: <?= $escape($dispute["resolution"]) ?> by <?= $escape($dispute["resolver_name"]) ?>
+                            at <?= $escape($dispute["resolved_at"]) ?></p>
+                        <p>Resolution reason: <?= $escape($dispute["resolution_reason"]) ?></p>
+                    <?php else: ?>
+                        <p>Awaiting administrator resolution.</p>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+        <?php endif; ?>
+        <p class="action-state" aria-live="polite"></p>
+    </section>
+
+    <script>
+        document.querySelectorAll(".transaction-action-form").forEach(form => {
+            form.addEventListener("submit", async event => {
+                event.preventDefault();
+                const state = form.closest(".payment-panel, .dispute-panel, .handover-panel").querySelector(".action-state");
+                const submitter = event.submitter;
+                if (submitter && submitter.name && submitter.value) {
+                    form.querySelectorAll('input[name="action"]').forEach(input => input.remove());
+                }
+                const data = new FormData(form);
+                if (submitter && submitter.name && submitter.value) data.set(submitter.name, submitter.value);
+                try {
+                    const response = await fetch(form.action, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: { "Accept": "application/json" },
+                        body: data
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || "The request could not be completed.");
+                    window.location.reload();
+                } catch (error) {
+                    state.textContent = error.message || "The request could not be completed.";
+                }
+            });
+        });
+    </script>
+    <?php if ($transaction["chat_room_id"] !== null): ?>
+        <?php $canSend = in_array($transaction["status"], ["in_progress", "disputed"], true); ?>
+        <section class="chat" aria-labelledby="chat-title" data-transaction-id="<?= (int) $transaction["id"] ?>">
+            <header>
+                <h2 id="chat-title">Transaction chat</h2>
+                <p>Room #<?= (int) $transaction["chat_room_id"] ?> · <?= $canSend ? "Messages are visible only to these transaction participants." : "This chat is read-only. Message history is preserved." ?></p>
+            </header>
+            <div class="messages" id="chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+            <div class="chat-state" id="chat-state" role="status">Loading messages…</div>
+            <button type="button" class="chat-retry" id="chat-retry" hidden>Retry loading messages</button>
+            <form class="chat-form" id="chat-form">
+                <label for="chat-message" class="visually-hidden">Message</label>
+                <textarea id="chat-message" name="message_body" maxlength="2000" rows="2" required <?= $canSend ? "" : "disabled" ?>></textarea>
+                <button type="submit" <?= $canSend ? "" : "disabled" ?>>Send</button>
+            </form>
+        </section>
+        <style>.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }</style>
+        <script>
+            (() => {
+                const chat = document.querySelector(".chat");
+                const transactionId = chat.dataset.transactionId;
+                const messages = document.getElementById("chat-messages");
+                const state = document.getElementById("chat-state");
+                const form = document.getElementById("chat-form");
+                const input = document.getElementById("chat-message");
+                const submit = form.querySelector("button");
+                const retry = document.getElementById("chat-retry");
+                const csrfToken = <?= json_encode(csrf_token(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                let lastId = 0;
+                let timer = null;
+                let sending = false;
+
+                function showState(text, isError = false) {
+                    state.textContent = text;
+                    state.classList.toggle("error", isError);
+                    state.hidden = false;
+                    retry.hidden = !isError;
+                }
+
+                function addMessage(message) {
+                    const id = Number(message.id);
+                    if (!Number.isSafeInteger(id) || id <= lastId) return;
+                    lastId = id;
+                    const item = document.createElement("article");
+                    item.className = "message" + (Number(message.sender_id) === <?= (int) $userId ?> ? " own" : "");
+                    const body = document.createElement("p");
+                    body.textContent = message.message_body;
+                    const meta = document.createElement("small");
+                    const time = document.createElement("time");
+                    time.dateTime = message.created_at;
+                    time.textContent = message.sender_name + " · " + message.created_at;
+                    meta.appendChild(time);
+                    item.append(body, meta);
+                    messages.appendChild(item);
+                    messages.scrollTop = messages.scrollHeight;
+                }
+
+                async function loadMessages() {
+                    if (document.hidden) return;
+                    try {
+                        const query = new URLSearchParams({
+                            transaction_id: transactionId,
+                            after_id: String(lastId)
+                        });
+                        const response = await fetch("chat_messages.php?" + query, {
+                            credentials: "same-origin",
+                            cache: "no-store",
+                            headers: { "Accept": "application/json" }
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.error || "Messages could not be loaded.");
+                        result.messages.forEach(addMessage);
+                        showState(messages.childElementCount === 0 ? "No messages yet. Start the conversation." : "");
+                        if (!result.can_send) {
+                            input.disabled = true;
+                            submit.disabled = true;
+                            chat.querySelector("header p").textContent = "This chat is read-only. Message history is preserved.";
+                        }
+                    } catch (error) {
+                        showState(error.message || "A network error prevented loading messages.", true);
+                    } finally {
+                        clearTimeout(timer);
+                        timer = setTimeout(loadMessages, 3000);
+                    }
+                }
+
+                form.addEventListener("submit", async event => {
+                    event.preventDefault();
+                    if (sending || input.disabled) return;
+                    const body = input.value;
+                    if (!body.trim()) {
+                        showState("Enter a message before sending.", true);
+                        return;
+                    }
+                    sending = true;
+                    submit.disabled = true;
+                    try {
+                        const data = new URLSearchParams({
+                            transaction_id: transactionId,
+                            message_body: body,
+                            csrf_token: csrfToken
+                        });
+                        const response = await fetch("chat_messages.php", {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: {
+                                "Accept": "application/json",
+                                "Content-Type": "application/x-www-form-urlencoded"
+                            },
+                            body: data
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.error || "Message could not be sent.");
+                        addMessage(result.message);
+                        input.value = "";
+                        showState("");
+                    } catch (error) {
+                        showState(error.message || "A network error prevented sending the message.", true);
+                    } finally {
+                        sending = false;
+                        submit.disabled = input.disabled;
+                    }
+                });
+
+                retry.addEventListener("click", loadMessages);
+                document.addEventListener("visibilitychange", () => {
+                    if (!document.hidden) {
+                        clearTimeout(timer);
+                        loadMessages();
+                    } else {
+                        clearTimeout(timer);
+                    }
+                });
+                loadMessages();
+            })();
+        </script>
+    <?php endif; ?>
+    <p><a href="offer_detail.php?id=<?= (int) $transaction["offer_id"] ?>">Back to offer</a></p>
+</main>
+</body>
+</html>
