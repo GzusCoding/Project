@@ -29,6 +29,9 @@ function offer_test_session(string $path, string $id, int $userId, string $csrfT
 
 function offer_test_request(string $baseUrl, string $path, ?string $sessionId, ?array $form = null): array
 {
+    if ($form === null) {
+        $path .= (str_contains($path, "?") ? "&" : "?") . "lang=en";
+    }
     $headers = ["Connection: close"];
     if ($sessionId !== null) {
         $headers[] = "Cookie: PHPSESSID=" . $sessionId;
@@ -150,13 +153,15 @@ try {
                 CHECK (typeof(cash_amount_minor) = 'integer' AND cash_amount_minor >= 0),
             cash_currency TEXT NULL,
             currency_exponent INTEGER NULL,
+            offered_price_minor INTEGER NULL,
+            target_price_minor INTEGER NULL,
             status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'superseded', 'expired')),
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             responded_at DATETIME NULL,
             CHECK (creator_id <> recipient_id),
-            CHECK (cash_payer_id = creator_id),
+            CHECK (cash_payer_id IN (creator_id, recipient_id)),
             CHECK (offered_product_id <> target_product_id),
             CHECK (
                 (cash_amount_minor = 0 AND cash_currency IS NULL AND currency_exponent IS NULL)
@@ -180,7 +185,15 @@ try {
                         OR (cash_currency = 'SGD' AND currency_exponent = 2)
                         OR (cash_currency = 'USD' AND currency_exponent = 2)
                         OR (cash_currency = 'VND' AND currency_exponent = 0)
+                        OR (cash_currency = 'THB' AND currency_exponent = 2)
                     )
+                )
+            ),
+            CHECK (
+                (offered_price_minor IS NULL AND target_price_minor IS NULL)
+                OR (
+                    typeof(offered_price_minor) = 'integer' AND offered_price_minor >= 0
+                    AND typeof(target_price_minor) = 'integer' AND target_price_minor >= 0
                 )
             ),
             FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE RESTRICT,
@@ -214,25 +227,27 @@ try {
     $productInsert = $pdo->prepare(
         "INSERT INTO products
             (id, user_id, name, description, price, transaction_type, status)
-         VALUES (:id, :user_id, :name, :description, 1, :transaction_type, :status)"
+         VALUES (:id, :user_id, :name, :description, :price, :transaction_type, :status)"
     );
     $products = [
-        [10, 1, "Creator exchange", "Mine", "exchange", "active"],
-        [11, 1, "Creator both", "Also mine", "both", "active"],
-        [12, 1, "Creator buy-only", "Buy only", "buy", "active"],
-        [13, 1, "Creator inactive", "Inactive", "exchange", "inactive"],
-        [20, 2, "<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "exchange", "active"],
-        [21, 2, "Recipient both", "Target", "both", "active"],
-        [22, 2, "Recipient buy-only", "Buy only target", "buy", "active"],
-        [23, 2, "Recipient inactive", "Inactive target", "exchange", "inactive"],
-        [30, 3, "Unrelated exchange", "Other owner", "exchange", "active"]
+        [10, 1, "Creator exchange", "Mine", "exchange", "active", 100.00],
+        [11, 1, "Creator both", "Also mine", "both", "active", 50.00],
+        [12, 1, "Creator buy-only", "Buy only", "buy", "active", 100.00],
+        [13, 1, "Creator inactive", "Inactive", "exchange", "inactive", 100.00],
+        [20, 2, "<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "exchange", "active", 60.00],
+        [21, 2, "Recipient both", "Target", "both", "active", 150.00],
+        [22, 2, "Recipient buy-only", "Buy only target", "buy", "active", 100.00],
+        [23, 2, "Recipient inactive", "Inactive target", "exchange", "inactive", 100.00],
+        [24, 2, "Recipient equal-value", "Equal target", "exchange", "active", 50.00],
+        [30, 3, "Unrelated exchange", "Other owner", "exchange", "active", 100.00]
     ];
-    foreach ($products as [$id, $ownerId, $name, $description, $type, $status]) {
+    foreach ($products as [$id, $ownerId, $name, $description, $type, $status, $price]) {
         $productInsert->execute([
             "id" => $id,
             "user_id" => $ownerId,
             "name" => $name,
             "description" => $description,
+            "price" => $price,
             "transaction_type" => $type,
             "status" => $status
         ]);
@@ -322,6 +337,13 @@ try {
             && !str_contains($formBody, "Creator inactive"),
         "Offer form exposed an ineligible owned product."
     );
+    offer_test_assert(
+        str_contains($formBody, 'data-price-minor="10000"')
+            && str_contains($formBody, 'data-price-minor="6000"')
+            && str_contains($formBody, 'id="cash-difference"')
+            && str_contains($formBody, "Math.abs(offered - requested)"),
+        "The offer form did not expose prices for an automatic cash-difference preview."
+    );
     offer_test_assert(!str_contains($formBody, "<script>alert(1)</script>"), "Offer form did not escape target XSS content.");
 
     [$status, , $headers] = offer_test_post($baseUrl, $creatorSession, $creatorCsrf, [
@@ -346,14 +368,16 @@ try {
         $offer !== false
             && (int) $offer["creator_id"] === 1
             && (int) $offer["recipient_id"] === 2
-            && (int) $offer["cash_payer_id"] === 1
+            && (int) $offer["cash_payer_id"] === 2
             && (int) $offer["offered_product_id"] === 10
             && (int) $offer["target_product_id"] === 20
-            && (int) $offer["cash_amount_minor"] === 250
-            && $offer["cash_currency"] === "USD"
+            && (int) $offer["cash_amount_minor"] === 4000
+            && $offer["cash_currency"] === "THB"
             && (int) $offer["currency_exponent"] === 2
+            && (int) $offer["offered_price_minor"] === 10000
+            && (int) $offer["target_price_minor"] === 6000
             && $offer["status"] === "pending",
-        "Created offer fields do not match the approved rules."
+        "The server did not calculate the THB difference or designate the lower-valued item's owner as payer."
     );
 
     [$status, $offerDetail] = offer_test_request($baseUrl, "/" . $location, $creatorSession);
@@ -374,12 +398,6 @@ try {
         ["offered_product_id" => "13"],
         ["offered_product_id" => "12"],
         ["offered_product_id" => "20"],
-        ["offered_product_id" => "10", "cash_amount_minor" => "-1"],
-        ["offered_product_id" => "10", "cash_amount_minor" => "1.5"],
-        ["offered_product_id" => "10", "cash_amount_minor" => "999999999999999999999999"],
-        ["offered_product_id" => "10", "cash_amount_minor" => ["1"]],
-        ["offered_product_id" => "10", "cash_amount_minor" => "1", "cash_currency" => "ZZZ"],
-        ["offered_product_id" => "10", "cash_amount_minor" => "1; DROP TABLE offers;--"],
         ["offered_product_id" => "10<script>"],
         ["offered_product_id" => "10 OR 1=1"],
         ["target_id" => "20 OR 1=1"],
@@ -413,35 +431,33 @@ try {
     offer_test_assert($status === 400, "Invalid CSRF token was not rejected.");
 
     [$status] = offer_test_post($baseUrl, $creatorSession, $creatorCsrf, [
-        "cash_amount_minor" => "0",
-        "cash_currency" => "BHD"
-    ]);
-    offer_test_assert($status === 303, "Zero-cash offer was rejected.");
+        "offered_product_id" => "11",
+        "cash_amount_minor" => "999999999999999999999999",
+        "cash_currency" => "ZZZ"
+    ], "24");
+    offer_test_assert($status === 303, "An equal-value offer was rejected.");
     $zeroCash = $pdo->query("SELECT * FROM offers ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
     offer_test_assert(
         (int) $zeroCash["cash_amount_minor"] === 0
             && $zeroCash["cash_currency"] === null
-            && $zeroCash["currency_exponent"] === null,
-        "Zero cash did not store NULL currency and exponent."
+            && $zeroCash["currency_exponent"] === null
+            && (int) $zeroCash["cash_payer_id"] === 1
+            && (int) $zeroCash["offered_price_minor"] === 5000
+            && (int) $zeroCash["target_price_minor"] === 5000,
+        "Equal-value products did not produce a zero difference, neutral payer, and price snapshots."
     );
 
-    foreach ([
-        ["amount" => "8", "currency" => "BHD", "exponent" => 3],
-        ["amount" => "8", "currency" => "JPY", "exponent" => 0]
-    ] as $currencyCase) {
-        [$status] = offer_test_post($baseUrl, $creatorSession, $creatorCsrf, [
-            "offered_product_id" => "11",
-            "cash_amount_minor" => $currencyCase["amount"],
-            "cash_currency" => $currencyCase["currency"]
-        ], "21");
-        offer_test_assert($status === 303, "Valid multi-currency offer was rejected.");
-        $currencyOffer = $pdo->query("SELECT * FROM offers ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-        offer_test_assert(
-            $currencyOffer["cash_currency"] === $currencyCase["currency"]
-                && (int) $currencyOffer["currency_exponent"] === $currencyCase["exponent"],
-            "Currency exponent did not match Step 4.2 rules."
-        );
-    }
+    [$status] = offer_test_post($baseUrl, $creatorSession, $creatorCsrf, [
+        "offered_product_id" => "11"
+    ], "21");
+    offer_test_assert($status === 303, "An offer where the creator owns the lower-valued item was rejected.");
+    $creatorPays = $pdo->query("SELECT * FROM offers ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    offer_test_assert(
+        (int) $creatorPays["cash_payer_id"] === 1
+            && (int) $creatorPays["cash_amount_minor"] === 10000
+            && $creatorPays["cash_currency"] === "THB",
+        "The creator did not pay when their offered item had the lower value."
+    );
 
     [$status] = offer_test_post($baseUrl, $creatorSession, $creatorCsrf);
     offer_test_assert($status === 303, "A second pending offer for the same product pair was rejected.");
@@ -451,7 +467,7 @@ try {
            AND offered_product_id = 10 AND target_product_id = 20
            AND status = 'pending'"
     )->fetchColumn();
-    offer_test_assert($duplicateCount === 3, "Duplicate pending offers were not preserved.");
+    offer_test_assert($duplicateCount === 2, "Duplicate pending offers were not preserved.");
 
     [$status] = offer_test_request($baseUrl, "/create_offer.php?target_id=23", $creatorSession);
     offer_test_assert($status === 404, "Inactive target was accepted.");

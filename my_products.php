@@ -1,6 +1,7 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/category_support.php";
 
 require_authenticated_user();
 
@@ -35,28 +36,21 @@ $escape = static fn ($value): string => htmlspecialchars(
     ENT_QUOTES | ENT_SUBSTITUTE,
     "UTF-8"
 );
-$categories = [
-    "electronics" => "Electronics",
-    "fashion" => "Fashion",
-    "home_living" => "Home & Living",
-    "books" => "Books",
-    "sports_outdoors" => "Sports & Outdoors",
-    "games_collectibles" => "Games & Collectibles",
-    "other" => "Other"
-];
+$categories = marketplace_category_labels($pdo);
 $transactionTypes = [
     "buy" => "Buy",
     "exchange" => "Exchange",
     "both" => "Buy or exchange"
 ];
+$transactionTypes = array_map("t", $transactionTypes);
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<?= $escape(app_language()) ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fffaf5">
-    <title>My products | Buy &amp; Exchange</title>
+    <title><?= $escape(t("My products")) ?> | Buy &amp; Exchange</title>
     <style>
         :root {
             font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -106,51 +100,52 @@ $transactionTypes = [
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
 <main>
     <header>
-        <h1>My products</h1>
+        <h1><?= $escape(t("My products")) ?></h1>
         <div class="header-actions">
-            <a class="button button--primary" href="add_product.php">+ Add Product</a>
-            <a class="button" href="index.php">Back to marketplace</a>
+            <a class="button button--primary" href="add_product.php">+ <?= $escape(t("Add Product")) ?></a>
+            <a class="button" href="index.php"><?= $escape(t("Back to marketplace")) ?></a>
         </div>
     </header>
-    <p class="subtitle">Manage the items you have listed.</p>
+    <p class="subtitle"><?= $escape(t("Manage the items you have listed.")) ?></p>
 
     <?php if ($success !== ""): ?>
-        <p class="success" role="status"><?= $escape($success) ?></p>
+        <p class="success" role="status"><?= $escape(t($success)) ?></p>
     <?php endif; ?>
 
     <?php if ($loadFailed): ?>
-        <p class="notice" role="alert">Your products could not be loaded. Please try again later.</p>
+        <p class="notice" role="alert"><?= $escape(t("Your products could not be loaded. Please try again later.")) ?></p>
     <?php elseif ($products === []): ?>
-        <p>You have not listed any products yet.</p>
+        <p><?= $escape(t("You have not listed any products yet.")) ?></p>
     <?php else: ?>
-        <section class="product-list" aria-label="Your products">
+        <section class="product-list" aria-label="<?= $escape(t("Your products")) ?>">
             <?php foreach ($products as $product): ?>
                 <article class="product">
                     <?php if (is_string($product["image"]) && $product["image"] !== ""): ?>
                         <img src="<?= $escape($product["image"]) ?>" alt="<?= $escape($product["name"]) ?>">
                     <?php else: ?>
-                        <div class="placeholder">No image</div>
+                        <div class="placeholder"><?= $escape(t("No image")) ?></div>
                     <?php endif; ?>
                     <div>
                         <h2><?= $escape($product["name"]) ?></h2>
                         <div class="meta">
                             <span class="price"><?= number_format((float) $product["price"], 2) ?></span>
                             <span><?= $escape($categories[$product["category"] ?? ""] ?? "Other") ?></span>
-                            <span><?= $escape($transactionTypes[$product["transaction_type"] ?? ""] ?? "Unknown type") ?></span>
+                            <span><?= $escape($transactionTypes[$product["transaction_type"] ?? ""] ?? t("Unknown type")) ?></span>
                             <span class="status<?= $product["status"] === "inactive" ? " status--inactive" : "" ?>">
-                                <?= $escape(ucfirst((string) $product["status"])) ?>
+                                <?= $escape(t(ucfirst((string) $product["status"]))) ?>
                             </span>
                         </div>
                     </div>
                     <div class="actions">
                         <?php if ($product["status"] === "reserved" || (int) $product["is_reserved"] === 1): ?>
-                            <span>Reserved for an exchange</span>
+                            <span><?= $escape(t("Reserved for an exchange")) ?></span>
                         <?php else: ?>
-                            <a class="button button--primary" href="edit_product.php?id=<?= (int) $product["id"] ?>">Edit</a>
+                            <a class="button button--primary" href="edit_product.php?id=<?= (int) $product["id"] ?>"><?= $escape(t("Edit")) ?></a>
                             <?php if ($product["status"] !== "inactive"): ?>
-                                <a class="button" href="deactivate_product.php?id=<?= (int) $product["id"] ?>">Deactivate</a>
+                                <a class="button" href="deactivate_product.php?id=<?= (int) $product["id"] ?>"><?= $escape(t("Deactivate")) ?></a>
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>

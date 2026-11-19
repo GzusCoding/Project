@@ -187,7 +187,10 @@ try {
         "migrate_payment_evidence.php",
         "migrate_handover_confirmations.php"
     ] as $script) {
-        if (!copy($projectRoot . DIRECTORY_SEPARATOR . $script, $appRoot . DIRECTORY_SEPARATOR . $script)) {
+        if (!copy(
+            $projectRoot . DIRECTORY_SEPARATOR . "migrations" . DIRECTORY_SEPARATOR . $script,
+            $appRoot . DIRECTORY_SEPARATOR . $script
+        )) {
             throw new RuntimeException("Could not copy {$script} into the fixture.");
         }
     }

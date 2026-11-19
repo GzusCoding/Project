@@ -11,6 +11,7 @@ session_set_cookie_params([
     "samesite" => "Lax"
 ]);
 session_start();
+require_once __DIR__ . "/i18n.php";
 
 function csrf_token(): string
 {
@@ -37,6 +38,37 @@ function require_authenticated_user(): void
         header("Location: login.php");
         exit;
     }
+
+    global $pdo;
+    $userId = filter_var($_SESSION["user_id"], FILTER_VALIDATE_INT);
+    if (
+        $pdo instanceof PDO
+        && ($userId === false || $userId === null || $userId <= 0
+            || !user_account_is_active($pdo, $userId))
+    ) {
+        $_SESSION = [];
+        session_destroy();
+        http_response_code(403);
+        exit("บัญชีนี้ถูกระงับหรือไม่สามารถใช้งานได้");
+    }
+}
+
+function user_account_is_active(PDO $pdo, int $userId): bool
+{
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== "sqlite") {
+        return true;
+    }
+    $columns = array_column(
+        $pdo->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_ASSOC),
+        "name"
+    );
+    if (!in_array("account_status", $columns, true)) {
+        return true;
+    }
+    $stmt = $pdo->prepare("SELECT account_status FROM users WHERE id = :id");
+    $stmt->execute(["id" => $userId]);
+
+    return $stmt->fetchColumn() === "active";
 }
 
 function require_admin_user(PDO $pdo): void

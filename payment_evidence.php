@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
-require_once __DIR__ . "/payment_support.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/payment_support.php";
 
 header("Cache-Control: no-store, private");
 header("X-Content-Type-Options: nosniff");
@@ -17,6 +17,9 @@ $userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
 $evidenceId = payment_positive_id($_GET["id"] ?? null);
 if ($userId === false || $userId === null || $userId <= 0) {
     payment_json_response(["error" => "Authentication required."], 401);
+}
+if (!user_account_is_active($pdo, (int) $userId)) {
+    payment_json_response(["error" => "This account is suspended or unavailable."], 403);
 }
 if ($evidenceId === false) {
     payment_json_response(["error" => "Evidence not found."], 404);

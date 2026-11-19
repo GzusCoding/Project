@@ -27,7 +27,7 @@ function payment_positive_id(mixed $value): int|false
 
 function payment_transaction(PDO $pdo, int $transactionId, int $userId, bool $lock = false): array|false
 {
-    $sql = "SELECT id, creator_id, recipient_id, cash_amount_minor, cash_currency,
+    $sql =     "SELECT id, creator_id, recipient_id, cash_payer_id, cash_amount_minor, cash_currency,
                    currency_exponent, payment_method, payment_status, status
             FROM exchange_transactions
             WHERE id = :id
@@ -53,6 +53,15 @@ function payment_begin(PDO $pdo): void
         $pdo->exec("BEGIN IMMEDIATE");
     } else {
         $pdo->beginTransaction();
+    }
+}
+
+function payment_commit(PDO $pdo): void
+{
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === "sqlite") {
+        $pdo->exec("COMMIT");
+    } else {
+        $pdo->commit();
     }
 }
 
@@ -101,7 +110,7 @@ function payment_store_directory(): string
     $configured = getenv("PAYMENT_EVIDENCE_DIR");
     $directory = is_string($configured) && $configured !== ""
         ? $configured
-        : dirname(__DIR__) . DIRECTORY_SEPARATOR . "private-payment-evidence";
+        : dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . "private-payment-evidence";
     if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
         throw new RuntimeException("The private evidence directory could not be created.");
     }

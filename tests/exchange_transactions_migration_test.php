@@ -90,7 +90,10 @@ try {
     }
     $created = true;
     foreach (["migrate_offers.php", "migrate_exchange_transactions.php"] as $script) {
-        if (!copy($projectRoot . DIRECTORY_SEPARATOR . $script, $temporaryRoot . DIRECTORY_SEPARATOR . $script)) {
+        if (!copy(
+            $projectRoot . DIRECTORY_SEPARATOR . "migrations" . DIRECTORY_SEPARATOR . $script,
+            $temporaryRoot . DIRECTORY_SEPARATOR . $script
+        )) {
             throw new RuntimeException("Could not copy {$script} into the disposable directory.");
         }
     }

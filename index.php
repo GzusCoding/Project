@@ -1,26 +1,22 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/notification_support.php";
+require_once __DIR__ . "/includes/category_support.php";
 
-$categories = [
-    "electronics" => "Electronics",
-    "fashion" => "Fashion",
-    "home_living" => "Home & Living",
-    "books" => "Books",
-    "sports_outdoors" => "Sports & Outdoors",
-    "games_collectibles" => "Games & Collectibles",
-    "other" => "Other"
-];
+$categories = marketplace_category_labels($pdo);
 $transactionTypes = [
     "buy" => "Buy",
     "exchange" => "Exchange",
     "both" => "Buy or exchange"
 ];
+$transactionTypes = array_map("t", $transactionTypes);
 $conditions = [
     "new" => "New",
     "like_new" => "Like new",
     "used" => "Used"
 ];
+$conditions = array_map("t", $conditions);
 $searchInput = $_GET["search"] ?? "";
 $search = is_string($searchInput) ? trim($searchInput) : "";
 $categoryInput = $_GET["category"] ?? "";
@@ -39,9 +35,29 @@ $invalidFilters = (
     && (!is_string($transactionInput) || !in_array($transactionInput, ["buy", "exchange", "both"], true))
 );
 $isAuthenticated = isset($_SESSION["user_id"]);
+$notificationCount = 0;
+$notificationsAvailable = false;
+if ($isAuthenticated) {
+    $authenticatedUserId = filter_var($_SESSION["user_id"], FILTER_VALIDATE_INT);
+    if (
+        $authenticatedUserId === false
+        || $authenticatedUserId === null
+        || $authenticatedUserId <= 0
+        || !user_account_is_active($pdo, $authenticatedUserId)
+    ) {
+        $_SESSION = [];
+        session_destroy();
+        $isAuthenticated = false;
+    } else {
+        $notificationsAvailable = notification_schema_available($pdo);
+        if ($notificationsAvailable) {
+            $notificationCount = notification_unread_count($pdo, $authenticatedUserId);
+        }
+    }
+}
 $name = is_string($_SESSION["user_name"] ?? null)
     ? $_SESSION["user_name"]
-    : "สมาชิก";
+    : t("Member");
 $productSuccess = is_string($_SESSION["product_success"] ?? null)
     ? $_SESSION["product_success"]
     : "";
@@ -111,12 +127,12 @@ $escape = static fn ($value): string => htmlspecialchars(
 );
 ?>
 <!DOCTYPE html>
-<html lang="th">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fff8f1">
-    <title>Buy &amp; Exchange | Hybrid Marketplace</title>
+    <title>Buy &amp; Exchange | <?= htmlspecialchars(t("Hybrid Marketplace"), ENT_QUOTES, "UTF-8") ?></title>
     <style>
         :root {
             color-scheme: light;
@@ -336,6 +352,11 @@ $escape = static fn ($value): string => htmlspecialchars(
 
         .nav-inner a:hover {
             color: var(--orange-dark);
+        }
+
+        .language-switcher {
+            margin-left: auto;
+            white-space: nowrap;
         }
 
         main {
@@ -1088,45 +1109,54 @@ $escape = static fn ($value): string => htmlspecialchars(
                 <input
                     type="search"
                     name="search"
-                    placeholder="ค้นหาสินค้า..."
-                    aria-label="ค้นหาสินค้า"
+                    placeholder="<?= $escape(t("Search products...")) ?>"
+                    aria-label="<?= $escape(t("Search")) ?>"
                     value="<?= $escape($search) ?>"
                 >
                 <input type="hidden" name="category" value="<?= $escape($category) ?>">
                 <input type="hidden" name="transaction" value="<?= $escape($transaction) ?>">
-                <button type="submit">ค้นหา</button>
+                <button type="submit"><?= $escape(t("Search")) ?></button>
             </form>
 
             <div class="account-actions">
                 <?php if ($isAuthenticated): ?>
-                    <span class="account-name">สวัสดี, <?= htmlspecialchars($name, ENT_QUOTES, "UTF-8") ?></span>
-                    <a class="button button--light" href="my_products.php">สินค้าของฉัน</a>
-                    <a class="button button--light" href="my_offers.php">My offers</a>
+                    <span class="account-name"><?= $escape(t("สวัสดี,")) ?> <?= htmlspecialchars($name, ENT_QUOTES, "UTF-8") ?></span>
+                    <a class="button button--light" href="my_products.php"><?= $escape(t("My products")) ?></a>
+                    <a class="button button--light" href="my_orders.php"><?= $escape(t("My orders")) ?></a>
+                    <?php if ($notificationsAvailable): ?>
+                        <a class="button button--light" href="notifications.php">
+                            <?= $escape(t("Notifications")) ?><?= $notificationCount > 0 ? " ({$notificationCount})" : "" ?>
+                        </a>
+                    <?php endif; ?>
+                    <a class="button button--light" href="my_offers.php"><?= $escape(t("My offers & orders")) ?></a>
                     <?php if (($_SESSION["user_role"] ?? null) === "admin"): ?>
-                        <a class="button button--light" href="admin.php">จัดการ</a>
+                        <a class="button button--light" href="admin.php"><?= $escape(t("Manage")) ?></a>
                     <?php endif; ?>
                     <form class="logout-form" method="POST" action="logout.php">
                         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, "UTF-8") ?>">
-                        <button class="button button--dark" type="submit">ออกจากระบบ</button>
+                        <button class="button button--dark" type="submit"><?= $escape(t("Logout")) ?></button>
                     </form>
                 <?php else: ?>
-                    <a class="button button--light" href="login.php">เข้าสู่ระบบ</a>
-                    <a class="button" href="register.php">สมัครสมาชิก</a>
+                    <a class="button button--light" href="login.php"><?= $escape(t("Login")) ?></a>
+                    <a class="button" href="register.php"><?= $escape(t("Register")) ?></a>
                 <?php endif; ?>
             </div>
         </div>
 
-        <nav class="site-nav" aria-label="เมนูหลัก">
+        <nav class="site-nav" aria-label="<?= $escape(t("Main menu")) ?>">
             <div class="nav-inner">
-                <a href="#home">หน้าแรก</a>
-                <a href="#categories">หมวดหมู่</a>
-                <a href="#products">เลือกซื้อสินค้า</a>
+                <a href="#home"><?= $escape(t("Home")) ?></a>
+                <a href="#categories"><?= $escape(t("Categories")) ?></a>
+                <a href="#products"><?= $escape(t("Browse products")) ?></a>
                 <?php if ($isAuthenticated): ?>
-                    <a href="add_product.php">Add Product</a>
-                    <a href="my_products.php">สินค้าของฉัน</a>
-                    <a href="my_offers.php">My offers</a>
+                    <a href="add_product.php"><?= $escape(t("Add Product")) ?></a>
+                    <a href="my_products.php"><?= $escape(t("My products")) ?></a>
+                    <a href="my_orders.php"><?= $escape(t("My orders")) ?></a>
+                    <a href="my_offers.php"><?= $escape(t("My offers & orders")) ?></a>
+                    <a href="my_chats.php"><?= $escape(t("My chats")) ?></a>
                 <?php endif; ?>
-                <a href="#trade">ซื้อและแลกเปลี่ยน</a>
+                <a href="#trade"><?= $escape(t("Buy & Exchange")) ?></a>
+                <?= language_switcher() ?>
             </div>
         </nav>
     </header>
@@ -1140,23 +1170,22 @@ $escape = static fn ($value): string => htmlspecialchars(
 
         <section class="hero" aria-labelledby="hero-title">
             <div class="hero-copy">
-                <span class="eyebrow">A marketplace with more possibilities</span>
-                <h1 id="hero-title">ของที่ใช่<br>เริ่มได้ที่ <span>Buy &amp; Exchange</span></h1>
+                <span class="eyebrow"><?= $escape(t("A marketplace with more possibilities")) ?></span>
+                <h1 id="hero-title"><?= $escape(t("ของที่ใช่")) ?><br><?= $escape(t("เริ่มได้ที่")) ?> <span>Buy &amp; Exchange</span></h1>
                 <p>
-                    เลือกซื้อสินค้าที่ถูกใจวันนี้ และร่วมเปิดโอกาสให้การแลกเปลี่ยนเป็นอีกทางเลือก
-                    เรากำลังสร้างพื้นที่ซื้อขายที่ยืดหยุ่นสำหรับทุกคน
+                <?= $escape(t("เลือกซื้อสินค้าที่ถูกใจวันนี้ และร่วมเปิดโอกาสให้การแลกเปลี่ยนเป็นอีกทางเลือก เรากำลังสร้างพื้นที่ซื้อขายที่ยืดหยุ่นสำหรับทุกคน")) ?>
                 </p>
                 <div class="hero-actions">
-                    <a class="button" href="#products">เลือกดูสินค้า <span aria-hidden="true">&nbsp;→</span></a>
-                    <a class="button button--light" href="#trade">รู้จัก Buy &amp; Exchange</a>
+                <a class="button" href="#products"><?= $escape(t("เลือกดูสินค้า")) ?> <span aria-hidden="true">&nbsp;→</span></a>
+                <a class="button button--light" href="#trade"><?= $escape(t("รู้จัก Buy & Exchange")) ?></a>
                 </div>
             </div>
             <div class="hero-art" aria-hidden="true">
                 <div class="art-circle"></div>
                 <div class="swap-card">
                     <div class="swap-icons"><span>🛍️</span><span>↔</span><span>🎁</span></div>
-                    <strong>Buy what you love</strong>
-                    <small>Exchange is part of the journey</small>
+                    <strong><?= $escape(t("Buy what you love")) ?></strong>
+                    <small><?= $escape(t("Exchange is part of the journey")) ?></small>
                 </div>
             </div>
         </section>
@@ -1164,8 +1193,8 @@ $escape = static fn ($value): string => htmlspecialchars(
         <section class="section" id="categories" aria-labelledby="categories-title">
             <div class="section-heading">
                 <div>
-                    <h2 id="categories-title">เลือกดูหมวดหมู่</h2>
-                    <p>เลือกหมวดหมู่เพื่อกรองสินค้าล่าสุด โดยรายการจะแสดงเฉพาะสินค้าที่เปิดใช้งาน</p>
+                    <h2 id="categories-title"><?= $escape(t("เลือกดูหมวดหมู่")) ?></h2>
+                    <p><?= $escape(t("เลือกหมวดหมู่เพื่อกรองสินค้าล่าสุด โดยรายการจะแสดงเฉพาะสินค้าที่เปิดใช้งาน")) ?></p>
                 </div>
             </div>
             <div class="category-grid">
@@ -1173,7 +1202,7 @@ $escape = static fn ($value): string => htmlspecialchars(
                    href="<?= $escape($categoryFilterUrl("")) ?>"
                    <?= $category === "" ? 'aria-current="true"' : "" ?>>
                     <span class="category-icon" aria-hidden="true">🧺</span>
-                    <span><strong>All Categories</strong><span>Browse all active listings</span></span>
+                    <span><strong><?= $escape(t("All Categories")) ?></strong><span><?= $escape(t("Browse all active listings")) ?></span></span>
                     <span class="category-arrow" aria-hidden="true">→</span>
                 </a>
                 <?php foreach ($categories as $value => $label): ?>
@@ -1181,7 +1210,7 @@ $escape = static fn ($value): string => htmlspecialchars(
                        href="<?= $escape($categoryFilterUrl($value)) ?>"
                        <?= $category === $value ? 'aria-current="true"' : "" ?>>
                         <span class="category-icon" aria-hidden="true">◇</span>
-                        <span><strong><?= $escape($label) ?></strong><span>Browse active listings</span></span>
+                        <span><strong><?= $escape($label) ?></strong><span><?= $escape(t("Browse active listings")) ?></span></span>
                         <span class="category-arrow" aria-hidden="true">→</span>
                     </a>
                 <?php endforeach; ?>
@@ -1191,23 +1220,23 @@ $escape = static fn ($value): string => htmlspecialchars(
         <section class="section" id="trade" aria-labelledby="trade-title">
             <div class="section-heading">
                 <div>
-                    <h2 id="trade-title">ซื้อ หรือแลกเปลี่ยน — เลือกได้ตามต้องการ</h2>
-                    <p>Buy &amp; Exchange เชื่อมต่อการซื้อขายวันนี้กับการแลกเปลี่ยนในอนาคต</p>
+                    <h2 id="trade-title"><?= $escape(t("ซื้อ หรือแลกเปลี่ยน — เลือกได้ตามต้องการ")) ?></h2>
+                    <p><?= $escape(t("Buy & Exchange เชื่อมต่อการซื้อขายวันนี้กับการแลกเปลี่ยนในอนาคต")) ?></p>
                 </div>
             </div>
             <div class="trade-grid">
                 <article class="trade-card">
                     <span class="trade-icon" aria-hidden="true">🛒</span>
                     <div>
-                        <h3>เลือกซื้อสินค้า</h3>
-                        <p>ดูราคา ผู้ขาย และรายละเอียดก่อนเข้าชมหน้าสินค้า รายการปัจจุบันแสดงตามข้อมูลที่มีในระบบ</p>
+                        <h3><?= $escape(t("Shop for products")) ?></h3>
+                        <p><?= $escape(t("เลือกสินค้า ระบุวิธีชำระเงิน และติดตามการยืนยันส่งมอบกับการรับสินค้าได้จากรายการซื้อขายของคุณ")) ?></p>
                     </div>
                 </article>
                 <article class="trade-card">
                     <span class="trade-icon" aria-hidden="true">↔</span>
                     <div>
-                        <h3>แลกเปลี่ยนได้ในอนาคต</h3>
-                        <p>ระบบแลกเปลี่ยนกำลังจะตามมา ขณะนี้ยังไม่มีการส่งข้อเสนอหรือยืนยันการแลกเปลี่ยน</p>
+                        <h3><?= $escape(t("Offer an exchange")) ?></h3>
+                        <p><?= $escape(t("เลือกสินค้าที่ต้องการแลก ส่งข้อเสนอให้เจ้าของสินค้า และติดตามสถานะการแลกเปลี่ยนในระบบ")) ?></p>
                     </div>
                 </article>
             </div>
@@ -1216,18 +1245,18 @@ $escape = static fn ($value): string => htmlspecialchars(
         <section class="section" id="products" aria-labelledby="products-title">
             <div class="listing-toolbar">
                 <div class="section-heading">
-                    <h2 id="products-title"><?= $hasActiveFilters ? "ผลการค้นหา" : "สินค้าล่าสุด" ?></h2>
-                    <p><?= $hasActiveFilters ? "รายการสินค้าที่ตรงกับตัวกรองที่เลือก" : "ค้นพบสินค้าที่น่าสนใจจากผู้ขายในชุมชน" ?></p>
+                    <h2 id="products-title"><?= $escape(t($hasActiveFilters ? "ผลการค้นหา" : "สินค้าล่าสุด")) ?></h2>
+                    <p><?= $escape(t($hasActiveFilters ? "รายการสินค้าที่ตรงกับตัวกรองที่เลือก" : "ค้นพบสินค้าที่น่าสนใจจากผู้ขายในชุมชน")) ?></p>
                 </div>
-                <span class="listing-count"><?= count($products) ?> รายการ</span>
+                <span class="listing-count"><?= count($products) ?> <?= $escape(t("items")) ?></span>
             </div>
 
             <form class="filter-form" method="GET" action="index.php">
                 <input type="hidden" name="search" value="<?= $escape($search) ?>">
                 <label class="filter-field" for="category-filter">
-                    Category
+                    <?= $escape(t("Category")) ?>
                     <select id="category-filter" name="category">
-                        <option value=""<?= $category === "" ? " selected" : "" ?>>All Categories</option>
+                        <option value=""<?= $category === "" ? " selected" : "" ?>><?= $escape(t("All Categories")) ?></option>
                         <?php foreach ($categories as $value => $label): ?>
                             <option value="<?= $escape($value) ?>"<?= $category === $value ? " selected" : "" ?>>
                                 <?= $escape($label) ?>
@@ -1236,41 +1265,41 @@ $escape = static fn ($value): string => htmlspecialchars(
                     </select>
                 </label>
                 <label class="filter-field" for="transaction-filter">
-                    Transaction type
+                    <?= $escape(t("Transaction type")) ?>
                     <select id="transaction-filter" name="transaction">
-                        <option value="all"<?= $transaction === "all" ? " selected" : "" ?>>All</option>
-                        <option value="buy"<?= $transaction === "buy" ? " selected" : "" ?>>Buy</option>
-                        <option value="exchange"<?= $transaction === "exchange" ? " selected" : "" ?>>Exchange</option>
-                        <option value="both"<?= $transaction === "both" ? " selected" : "" ?>>Both</option>
+                        <option value="all"<?= $transaction === "all" ? " selected" : "" ?>><?= $escape(t("All")) ?></option>
+                        <option value="buy"<?= $transaction === "buy" ? " selected" : "" ?>><?= $escape(t("Buy")) ?></option>
+                        <option value="exchange"<?= $transaction === "exchange" ? " selected" : "" ?>><?= $escape(t("Exchange")) ?></option>
+                        <option value="both"<?= $transaction === "both" ? " selected" : "" ?>><?= $escape(t("Both")) ?></option>
                     </select>
                 </label>
-                <button class="button" type="submit">Apply filters</button>
-                <a class="filter-reset" href="index.php#products">Reset filters</a>
+                <button class="button" type="submit"><?= $escape(t("Apply filters")) ?></button>
+                <a class="filter-reset" href="index.php#products"><?= $escape(t("Reset filters")) ?></a>
             </form>
 
             <?php if ($invalidFilters): ?>
-                <p class="filter-notice" role="status">An invalid filter was ignored. Any valid filters are still applied.</p>
+                <p class="filter-notice" role="status"><?= $escape(t("An invalid filter was ignored. Any valid filters are still applied.")) ?></p>
             <?php endif; ?>
 
             <?php if ($hasActiveFilters): ?>
-                <div class="active-filters" aria-label="Active filters">
-                    <span>Active filters:</span>
+                <div class="active-filters" aria-label="<?= $escape(t("Active filters")) ?>">
+                    <span><?= $escape(t("Active filters:")) ?></span>
                     <?php if ($search !== ""): ?>
-                        <span class="filter-badge">Search: <?= $escape($search) ?></span>
+                        <span class="filter-badge"><?= $escape(t("Search:")) ?> <?= $escape($search) ?></span>
                     <?php endif; ?>
                     <?php if ($category !== ""): ?>
                         <span class="filter-badge"><?= $escape($categories[$category]) ?></span>
                     <?php endif; ?>
                     <?php if ($transaction !== "all"): ?>
-                        <span class="filter-badge"><?= $escape(ucfirst($transaction)) ?></span>
+                        <span class="filter-badge"><?= $escape(t(ucfirst($transaction))) ?></span>
                     <?php endif; ?>
                 </div>
             <?php endif; ?>
 
             <?php if ($listingFailed): ?>
                 <div class="empty-state" role="alert">
-                    <h3>สินค้าไม่สามารถโหลดได้ในขณะนี้</h3>
-                    <p>กรุณาลองใหม่อีกครั้งภายหลัง</p>
+                    <h3><?= $escape(t("สินค้าไม่สามารถโหลดได้ในขณะนี้")) ?></h3>
+                    <p><?= $escape(t("กรุณาลองใหม่อีกครั้งภายหลัง")) ?></p>
                 </div>
             <?php elseif ($products !== []): ?>
                 <div class="product-grid">
@@ -1293,24 +1322,24 @@ $escape = static fn ($value): string => htmlspecialchars(
                                     loading="lazy"
                                 >
                             <?php else: ?>
-                                <div class="no-image" role="img" aria-label="ไม่มีรูปสินค้า">
-                                    <span><b aria-hidden="true">◇</b>ไม่มีรูปสินค้า</span>
+                                <div class="no-image" role="img" aria-label="<?= $escape(t("No image")) ?>">
+                                    <span><b aria-hidden="true">◇</b><?= $escape(t("No image")) ?></span>
                                 </div>
                             <?php endif; ?>
 
                             <div class="product-info">
                                 <h3><?= htmlspecialchars($product["name"], ENT_QUOTES, "UTF-8") ?></h3>
-                                <p class="product-price"><?= number_format((float) $product["price"], 2) ?> บาท</p>
+                                <p class="product-price"><?= number_format((float) $product["price"], 2) ?> <?= $escape(t("บาท")) ?></p>
                                 <div class="product-badges" aria-label="Product details">
                                     <span class="product-badge"><?= $escape($categories[$product["category"] ?? ""] ?? "Other") ?></span>
-                                    <span class="product-badge product-badge--condition"><?= $escape($conditions[$product["item_condition"] ?? ""] ?? "Condition not set") ?></span>
-                                    <span class="product-badge product-badge--transaction"><?= $escape($transactionTypes[$product["transaction_type"] ?? ""] ?? "Unknown type") ?></span>
+                                    <span class="product-badge product-badge--condition"><?= $escape($conditions[$product["item_condition"] ?? ""] ?? t("Condition not set")) ?></span>
+                                    <span class="product-badge product-badge--transaction"><?= $escape($transactionTypes[$product["transaction_type"] ?? ""] ?? t("Unknown type")) ?></span>
                                 </div>
                                 <p class="product-seller">
-                                    ผู้ขาย: <?= htmlspecialchars($product["seller_name"] ?? "ไม่ระบุ", ENT_QUOTES, "UTF-8") ?>
+                                    <?= $escape(t("ผู้ขาย:")) ?> <?= htmlspecialchars($product["seller_name"] ?? t("ไม่ระบุ"), ENT_QUOTES, "UTF-8") ?>
                                 </p>
                                 <a class="button" href="product_detail.php?id=<?= (int) $product["id"] ?>">
-                                    ดูรายละเอียดสินค้า
+                                    <?= $escape(t("View product details")) ?>
                                 </a>
                             </div>
                         </article>
@@ -1319,18 +1348,18 @@ $escape = static fn ($value): string => htmlspecialchars(
             <?php else: ?>
                 <div class="empty-state">
                     <span aria-hidden="true">🛍️</span>
-                    <h3><?= $hasActiveFilters ? "ไม่พบสินค้าที่ตรงกับตัวกรอง" : "กำลังรอสินค้าชิ้นแรก" ?></h3>
+                    <h3><?= $escape(t($hasActiveFilters ? "ไม่พบสินค้าที่ตรงกับตัวกรอง" : "กำลังรอสินค้าชิ้นแรก")) ?></h3>
                     <p>
-                        <?= $hasActiveFilters
+                        <?= $escape(t($hasActiveFilters
                             ? "ลองปรับคำค้นหาหรือตัวกรอง แล้วค้นหาอีกครั้ง"
-                            : "ยังไม่มีสินค้าในตลาด ลองกลับมาใหม่อีกครั้งเพื่อพบกับรายการใหม่ ๆ" ?>
+                            : "ยังไม่มีสินค้าในตลาด ลองกลับมาใหม่อีกครั้งเพื่อพบกับรายการใหม่ ๆ")) ?>
                     </p>
                     <?php if ($hasActiveFilters): ?>
-                        <a class="button button--light" href="index.php#products">Reset filters</a>
+                        <a class="button button--light" href="index.php#products"><?= $escape(t("Reset filters")) ?></a>
                     <?php elseif ($isAuthenticated): ?>
-                        <a class="button" href="add_product.php">Add Product</a>
+                        <a class="button" href="add_product.php"><?= $escape(t("Add Product")) ?></a>
                     <?php else: ?>
-                        <a class="button" href="register.php">เริ่มต้นใช้งาน</a>
+                        <a class="button" href="register.php"><?= $escape(t("Get started")) ?></a>
                     <?php endif; ?>
                 </div>
             <?php endif; ?>
@@ -1339,8 +1368,8 @@ $escape = static fn ($value): string => htmlspecialchars(
 
     <footer class="site-footer">
         <div class="footer-inner">
-            <span>BUY &amp; EXCHANGE · Hybrid Marketplace</span>
-            <span>ซื้อขายวันนี้ แลกเปลี่ยนได้ในอนาคต</span>
+            <span>BUY &amp; EXCHANGE · <?= $escape(t("Hybrid Marketplace")) ?></span>
+            <span><?= $escape(t("ซื้อขายวันนี้ แลกเปลี่ยนได้ในอนาคต")) ?></span>
         </div>
     </footer>
 </body>

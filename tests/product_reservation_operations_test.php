@@ -33,6 +33,9 @@ function reservation_operations_request(
     string $sessionId,
     ?array $form = null
 ): array {
+    if ($form === null) {
+        $path .= (str_contains($path, "?") ? "&" : "?") . "lang=en";
+    }
     $headers = ["Connection: close", "Cookie: PHPSESSID=" . $sessionId];
     $options = [
         "http" => [

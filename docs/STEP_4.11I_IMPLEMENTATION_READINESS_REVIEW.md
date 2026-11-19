@@ -2,10 +2,14 @@
 
 ## Purpose and scope
 
-This document corrects the Step 4.11I readiness review. It is a documentation
-and implementation-readiness correction only. No feature, application behavior,
-source code, database schema, migration, or deployment is implemented by this
-step.
+This document records the readiness review as it stood before implementation.
+Its future-work and authorization statements are historical and have been
+superseded by the user's subsequent authorization to implement the direct Buy
+workflow. The current implementation, migration order, verification, and
+workspace database status are documented in
+[`MARKETPLACE_WORKFLOW_IMPLEMENTATION.md`](./MARKETPLACE_WORKFLOW_IMPLEMENTATION.md).
+
+No migration has been applied to the workspace or Production database.
 
 ## A. Migration separation and numbering
 
@@ -51,7 +55,7 @@ The repository's migration scripts establish this sequence:
 
 The read-only inspection of the local workspace database
 `hybrid_marketplace.sqlite` found migration records 1 through 5. The workspace
-also contains `migrate_handover_confirmations.php` for version 6, but version 6
+also contains `migrations/migrate_handover_confirmations.php` for version 6, but version 6
 is not recorded in that local database.
 
 Therefore, v7 is **not confirmed as the next applicable migration** for the

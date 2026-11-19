@@ -1,28 +1,23 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/category_support.php";
 
 require_authenticated_user();
 
-$categories = [
-    "electronics" => "Electronics",
-    "fashion" => "Fashion",
-    "home_living" => "Home & Living",
-    "books" => "Books",
-    "sports_outdoors" => "Sports & Outdoors",
-    "games_collectibles" => "Games & Collectibles",
-    "other" => "Other"
-];
+$categories = marketplace_category_labels($pdo);
 $transactionTypes = [
     "buy" => "Buy",
     "exchange" => "Exchange",
     "both" => "Buy or exchange"
 ];
+$transactionTypes = array_map("t", $transactionTypes);
 $conditions = [
     "new" => "New",
     "like_new" => "Like new",
     "used" => "Used"
 ];
+$conditions = array_map("t", $conditions);
 $values = [
     "name" => "",
     "description" => "",
@@ -186,12 +181,12 @@ $escape = static fn (string $value): string => htmlspecialchars(
 );
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fffaf5">
-    <title>Add a product | Buy &amp; Exchange</title>
+    <title><?= $escape(t("Add a product")) ?> | Buy &amp; Exchange</title>
     <style>
         :root {
             color-scheme: light;
@@ -455,28 +450,29 @@ $escape = static fn (string $value): string => htmlspecialchars(
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
     <main class="page-shell">
         <header class="topbar">
-            <a class="brand" href="index.php" aria-label="Buy and Exchange home">
+            <a class="brand" href="index.php" aria-label="<?= $escape(t("Buy and Exchange home")) ?>">
                 <span class="brand-mark" aria-hidden="true">B</span>
                 <span class="brand-copy">
                     <strong>BUY &amp; EXCHANGE</strong>
-                    <span>Marketplace for things worth sharing</span>
+                    <span><?= $escape(t("Marketplace for things worth sharing")) ?></span>
                 </span>
             </a>
-            <a class="cancel-link" href="index.php">Cancel</a>
+            <a class="cancel-link" href="index.php"><?= $escape(t("Cancel")) ?></a>
         </header>
 
         <section class="intro">
-            <p class="eyebrow">Share something good</p>
-            <h1>Add a product</h1>
-            <p>Tell the community about your item. The estimated value helps buyers and potential exchange partners understand what it is worth.</p>
+            <p class="eyebrow"><?= $escape(t("Share something good")) ?></p>
+            <h1><?= $escape(t("Add a product")) ?></h1>
+            <p><?= $escape(t("Tell the community about your item. The estimated value helps buyers and potential exchange partners understand what it is worth.")) ?></p>
         </section>
 
         <?php if ($errors !== []): ?>
             <ul class="errors" role="alert">
                 <?php foreach ($errors as $error): ?>
-                    <li><?= $escape($error) ?></li>
+                    <li><?= $escape(t($error)) ?></li>
                 <?php endforeach; ?>
             </ul>
         <?php endif; ?>
@@ -484,34 +480,34 @@ $escape = static fn (string $value): string => htmlspecialchars(
         <form method="POST" action="" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
             <div class="form-layout">
-                <section class="form-card" aria-label="Product details">
+                <section class="form-card" aria-label="<?= $escape(t("Product details")) ?>">
                     <div class="field-grid">
                         <div class="field field--wide">
-                            <label for="name">Product name <span class="required">*</span></label>
+                            <label for="name"><?= $escape(t("Product name")) ?> <span class="required">*</span></label>
                             <input type="text" id="name" name="name" maxlength="200" required
                                    value="<?= $escape($values["name"]) ?>" autocomplete="off">
                         </div>
 
                         <div class="field field--wide">
-                            <label for="description">Description <span class="required">*</span></label>
+                            <label for="description"><?= $escape(t("Description")) ?> <span class="required">*</span></label>
                             <textarea id="description" name="description" maxlength="5000" rows="5" required><?= $escape($values["description"]) ?></textarea>
-                            <p class="help">Describe the item, its features, and anything a new owner should know.</p>
+                            <p class="help"><?= $escape(t("Describe the item, its features, and anything a new owner should know.")) ?></p>
                         </div>
 
                         <div class="field">
-                            <label for="price">Price / estimated value <span class="required">*</span></label>
+                            <label for="price"><?= $escape(t("Price / estimated value")) ?> <span class="required">*</span></label>
                             <div class="price-wrap">
                                 <input type="number" id="price" name="price" min="0.01" step="0.01"
                                        inputmode="decimal" required value="<?= $escape($values["price"]) ?>">
-                                <span class="currency">THB</span>
+                                <span class="currency"><?= $escape(t("THB")) ?></span>
                             </div>
-                            <p class="help">Enter a positive estimated value, including for exchange-only items.</p>
+                            <p class="help"><?= $escape(t("Enter a positive estimated value, including for exchange-only items.")) ?></p>
                         </div>
 
                         <div class="field">
-                            <label for="category">Category <span class="required">*</span></label>
+                            <label for="category"><?= $escape(t("Category")) ?> <span class="required">*</span></label>
                             <select id="category" name="category" required>
-                                <option value="">Choose a category</option>
+                                <option value=""><?= $escape(t("Choose a category")) ?></option>
                                 <?php foreach ($categories as $value => $label): ?>
                                     <option value="<?= $escape($value) ?>"<?= $values["category"] === $value ? " selected" : "" ?>>
                                         <?= $escape($label) ?>
@@ -521,7 +517,7 @@ $escape = static fn (string $value): string => htmlspecialchars(
                         </div>
 
                         <div class="field">
-                            <label for="transaction_type">Transaction type <span class="required">*</span></label>
+                            <label for="transaction_type"><?= $escape(t("Transaction type")) ?> <span class="required">*</span></label>
                             <select id="transaction_type" name="transaction_type" required>
                                 <?php foreach ($transactionTypes as $value => $label): ?>
                                     <option value="<?= $escape($value) ?>"<?= $values["transaction_type"] === $value ? " selected" : "" ?>>
@@ -532,9 +528,9 @@ $escape = static fn (string $value): string => htmlspecialchars(
                         </div>
 
                         <div class="field">
-                            <label for="item_condition">Item condition <span class="required">*</span></label>
+                            <label for="item_condition"><?= $escape(t("Item condition")) ?> <span class="required">*</span></label>
                             <select id="item_condition" name="item_condition" required>
-                                <option value="">Choose a condition</option>
+                                <option value=""><?= $escape(t("Choose a condition")) ?></option>
                                 <?php foreach ($conditions as $value => $label): ?>
                                     <option value="<?= $escape($value) ?>"<?= $values["item_condition"] === $value ? " selected" : "" ?>>
                                         <?= $escape($label) ?>
@@ -545,24 +541,24 @@ $escape = static fn (string $value): string => htmlspecialchars(
                     </div>
 
                     <div class="actions">
-                        <a class="cancel-link" href="index.php">Cancel</a>
-                        <button class="submit-button" type="submit">Add product</button>
+                        <a class="cancel-link" href="index.php"><?= $escape(t("Cancel")) ?></a>
+                        <button class="submit-button" type="submit"><?= $escape(t("Add product")) ?></button>
                     </div>
                 </section>
 
                 <aside class="image-card">
-                    <label for="product_image">Product image <span class="required">*</span></label>
+                    <label for="product_image"><?= $escape(t("Product image")) ?> <span class="required">*</span></label>
                     <input type="file" id="product_image" name="product_image"
                            accept="image/jpeg,image/png,image/webp" required>
-                    <p class="help">JPEG, PNG, or WebP. Maximum file size: 5 MB.</p>
+                    <p class="help"><?= $escape(t("JPEG, PNG, or WebP. Maximum file size: 5 MB.")) ?></p>
                     <div class="image-preview" id="image-preview">
-                        <img id="preview-image" alt="Preview of selected product image">
+                        <img id="preview-image" alt="<?= $escape(t("Preview of selected product image")) ?>">
                         <div class="preview-placeholder" id="preview-placeholder">
                             <span aria-hidden="true">◇</span>
-                            Your image preview will appear here
+                            <?= $escape(t("Your image preview will appear here")) ?>
                         </div>
                     </div>
-                    <p class="image-note">Use a clear photo so people can get a good look at your item.</p>
+                    <p class="image-note"><?= $escape(t("Use a clear photo so people can get a good look at your item.")) ?></p>
                 </aside>
             </div>
         </form>

@@ -2,14 +2,17 @@
 
 The migration source sequence is v1 through v6:
 
+Migration scripts are stored in `migrations/`; run the commands below from the
+project root.
+
 | Version | Migration | Source status |
 | --- | --- | --- |
-| 1 | Products | `migrate_products.php` |
-| 2 | Offers | `migrate_offers.php` |
-| 3 | Exchange transactions, product reservations, and chat rooms | `migrate_exchange_transactions.php` |
-| 4 | Chat messages | `migrate_chat_messages.php` |
-| 5 | Payment evidence and transaction disputes | `migrate_payment_evidence.php` |
-| 6 | Handover confirmations | `migrate_handover_confirmations.php` |
+| 1 | Products | `migrations/migrate_products.php` |
+| 2 | Offers | `migrations/migrate_offers.php` |
+| 3 | Exchange transactions, product reservations, and chat rooms | `migrations/migrate_exchange_transactions.php` |
+| 4 | Chat messages | `migrations/migrate_chat_messages.php` |
+| 5 | Payment evidence and transaction disputes | `migrations/migrate_payment_evidence.php` |
+| 6 | Handover confirmations | `migrations/migrate_handover_confirmations.php` |
 
 These are separate facts and must not be conflated:
 
@@ -101,7 +104,7 @@ From the project directory, after reviewing the selected database and taking
 the application offline:
 
 ```sh
-DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrate_offers.php
+DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrations/migrate_offers.php
 ```
 
 Only run this against the intended database after checking the printed path and
@@ -125,7 +128,7 @@ scope.
 
 ## Exchange transaction migration (version 3)
 
-The CLI-only `migrate_exchange_transactions.php` adds `exchange_transactions`,
+The CLI-only `migrations/migrate_exchange_transactions.php` adds `exchange_transactions`,
 `product_reservations`, and `chat_rooms`. Transactions snapshot the accepted
 offer's participants, products, creator-as-payer, and cash terms. Positive cash
 starts at `awaiting_method`; zero cash starts at `not_required`. New transactions
@@ -143,7 +146,7 @@ Review the selected path and take the application offline before an approved
 deployment. The documented CLI form is:
 
 ```sh
-DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrate_exchange_transactions.php
+DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrations/migrate_exchange_transactions.php
 ```
 
 Tests execute a copied script against disposable SQLite databases only.
@@ -157,7 +160,7 @@ without opening or changing the project database.
 
 ## Chat messages migration (version 4)
 
-`migrate_chat_messages.php` adds the SQLite-only `chat_messages` table,
+`migrations/migrate_chat_messages.php` adds the SQLite-only `chat_messages` table,
 `idx_chat_messages_room_created_id` on `(room_id, created_at, id)`, and database
 triggers that reject inserts or sender/room changes unless the sender is one of
 the room participants. Message bodies are constrained to 1–2000 characters.
@@ -173,7 +176,7 @@ The deployment command is documented here but must only be run against the
 intended database after an approved backup and maintenance window:
 
 ```sh
-DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrate_chat_messages.php
+DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrations/migrate_chat_messages.php
 ```
 
 The chat UI in `exchange_transaction.php` uses `chat_messages.php` for
@@ -190,7 +193,7 @@ SQLite database.
 
 ## Payment evidence and dispute migration (version 5)
 
-`migrate_payment_evidence.php` is a CLI-only SQLite migration that requires
+`migrations/migrate_payment_evidence.php` is a CLI-only SQLite migration that requires
 version 4. It rebuilds `exchange_transactions` in one immediate transaction to
 add `disputed` to the transaction status CHECK and replace the old payment
 status set with exactly `not_required`, `awaiting_method`, `awaiting_payment`,
@@ -221,7 +224,7 @@ For an approved deployment, take the application offline, verify the selected
 path and backup policy, and use:
 
 ```sh
-DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrate_payment_evidence.php
+DB_DRIVER=sqlite DB_PATH="$PWD/hybrid_marketplace.sqlite" php migrations/migrate_payment_evidence.php
 ```
 
 ### Payment and evidence rules
@@ -260,7 +263,7 @@ databases and local test HTTP servers only.
 
 ## Handover confirmations migration (version 6)
 
-`migrate_handover_confirmations.php` is a CLI-only SQLite migration that
+`migrations/migrate_handover_confirmations.php` is a CLI-only SQLite migration that
 requires migration version 5 to be recorded exactly once. It adds
 `handover_confirmations` with a unique constraint on
 `(transaction_id, confirmation_type)`, restrictive foreign keys to
@@ -280,7 +283,7 @@ completion guards.
 
 The verified target is
 `/workspaces/codespaces-blank/hybrid_marketplace.sqlite`. In the audit
-environment, `DB_PATH` and `DB_DRIVER` were unset; [db.php](./db.php) therefore
+environment, `DB_PATH` and `DB_DRIVER` were unset; [db.php](../includes/db.php) therefore
 resolves SQLite to the file beside the application. The ledger contained
 versions 1–5 exactly once, in order; `PRAGMA user_version` was 0. Read-only
 checks returned `integrity_check = ok` and no rows from `foreign_key_check`.
@@ -725,10 +728,9 @@ Only after separate explicit authorization and every preflight gate passes,
 run from the project directory so the path and script are unambiguous:
 
 ```bash
-cd /workspaces/codespaces-blank
 DB_DRIVER=sqlite \
-DB_PATH=/workspaces/codespaces-blank/hybrid_marketplace.sqlite \
-php /workspaces/codespaces-blank/migrate_handover_confirmations.php
+DB_PATH="$PWD/hybrid_marketplace.sqlite" \
+php migrations/migrate_handover_confirmations.php
 ```
 
 For an authorized run, preserve the complete interactive migration output in
@@ -737,14 +739,14 @@ overwriting an existing path); standard input remains attached to the
 terminal:
 
 ```bash
-AUDIT_DIR=/workspaces/codespaces-blank/.database-backups
+AUDIT_DIR="$PWD/.database-backups"
 LOG="$AUDIT_DIR/handover-v6-migration-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 ( set -C; : > "$LOG" )
 chmod 600 -- "$LOG"
 set -o pipefail
 DB_DRIVER=sqlite \
-DB_PATH=/workspaces/codespaces-blank/hybrid_marketplace.sqlite \
-php /workspaces/codespaces-blank/migrate_handover_confirmations.php 2>&1 \
+DB_PATH="$PWD/hybrid_marketplace.sqlite" \
+php migrations/migrate_handover_confirmations.php 2>&1 \
     | tee -a "$LOG"
 ```
 
@@ -1015,8 +1017,8 @@ separate authorization.
 
 The migration command, exact confirmation phrase, backup behavior, and
 transaction boundaries above match
-[migrate_handover_confirmations.php](./migrate_handover_confirmations.php).
+[migrations/migrate_handover_confirmations.php](../migrations/migrate_handover_confirmations.php).
 The functional test sources are
-[tests/handover_confirmations_migration_test.php](./tests/handover_confirmations_migration_test.php)
-and [tests/handover_workflow_test.php](./tests/handover_workflow_test.php).
+[tests/handover_confirmations_migration_test.php](../tests/handover_confirmations_migration_test.php)
+and [tests/handover_workflow_test.php](../tests/handover_workflow_test.php).
 This runbook update is documentation only; it does not apply or authorize v6.

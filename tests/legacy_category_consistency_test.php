@@ -184,14 +184,14 @@ try {
         "Homepage must label NULL as Other."
     );
 
-    $electronics = request_page($port, "/index.php?category=electronics", $sessionId);
+    $electronics = request_page($port, "/index.php?category=electronics&lang=en", $sessionId);
     assert_contains("Vintage Radio", $electronics, "Electronics filter must include electronics.");
     assert_not_contains("Vintage Camera", $electronics, "Electronics filter must exclude NULL categories.");
     assert_not_contains("Vintage Lamp", $electronics, "Electronics filter must exclude other.");
 
     $combined = request_page(
         $port,
-        "/index.php?search=vintage&transaction=buy",
+        "/index.php?search=vintage&transaction=buy&lang=en",
         $sessionId
     );
     assert_contains("Vintage Camera", $combined, "Combined search and transaction filters must include matching NULL-category products.");
@@ -200,18 +200,18 @@ try {
 
     $otherCombined = request_page(
         $port,
-        "/index.php?category=other&search=vintage&transaction=buy",
+        "/index.php?category=other&search=vintage&transaction=buy&lang=en",
         $sessionId
     );
     assert_contains("Vintage Camera", $otherCombined, "Combined Other, search, and transaction filters must include matching NULL products.");
     assert_not_contains("Vintage Lamp", $otherCombined, "Combined filters must exclude nonmatching transaction types.");
     assert_not_contains("Vintage Radio", $otherCombined, "Combined Other filter must exclude electronics.");
 
-    $details = request_page($port, "/product_detail.php?id=1", $sessionId);
+    $details = request_page($port, "/product_detail.php?id=1&lang=en", $sessionId);
     assert_contains("Vintage Camera", $details, "Product detail fixture should render.");
     assert_contains('<span class="badge">Other</span>', $details, "Product detail must label NULL as Other.");
 
-    $myProducts = request_page($port, "/my_products.php", $sessionId);
+    $myProducts = request_page($port, "/my_products.php?lang=en", $sessionId);
     assert_contains("Vintage Camera", $myProducts, "My Products fixture should render.");
     $nullProduct = product_markup($myProducts, "<h2>Vintage Camera</h2>");
     assert_contains("<span>Other</span>", $nullProduct, "My Products must label NULL as Other.");

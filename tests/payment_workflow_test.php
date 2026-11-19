@@ -157,24 +157,45 @@ try {
         throw new RuntimeException("Could not create isolated payment workflow directories.");
     }
     $created = true;
+    if (!mkdir($appRoot . DIRECTORY_SEPARATOR . "includes", 0700)) {
+        throw new RuntimeException("Could not create isolated shared-code directory.");
+    }
     $files = [
         "migrate_offers.php",
         "migrate_exchange_transactions.php",
         "migrate_chat_messages.php",
         "migrate_payment_evidence.php",
+        "migrate_exchange_cash_difference.php",
         "db.php",
         "security.php",
+        "i18n.php",
         "payment_support.php",
+        "notification_support.php",
+        "exchange_completion_support.php",
         "payment_action.php",
         "payment_evidence.php",
         "dispute_action.php",
         "admin_dispute_action.php",
         "exchange_transaction.php",
         "chat_messages.php",
+        "chat_media_support.php",
         "admin.php"
     ];
     foreach ($files as $file) {
-        if (!copy($projectRoot . DIRECTORY_SEPARATOR . $file, $appRoot . DIRECTORY_SEPARATOR . $file)) {
+        $isMigration = str_starts_with($file, "migrate_");
+        $isSharedCode = in_array($file, [
+            "db.php", "security.php", "i18n.php", "payment_support.php",
+            "notification_support.php", "exchange_completion_support.php",
+            "chat_media_support.php"
+        ], true);
+        $sourceDirectory = $isMigration ? "migrations" : ($isSharedCode ? "includes" : null);
+        $sourcePath = $projectRoot . DIRECTORY_SEPARATOR
+            . ($sourceDirectory === null ? "" : $sourceDirectory . DIRECTORY_SEPARATOR)
+            . $file;
+        $targetPath = $appRoot . DIRECTORY_SEPARATOR
+            . ($isSharedCode ? "includes" . DIRECTORY_SEPARATOR : "")
+            . $file;
+        if (!copy($sourcePath, $targetPath)) {
             throw new RuntimeException("Could not copy {$file} into the isolated application.");
         }
     }
@@ -243,25 +264,26 @@ try {
         "INSERT INTO offers (
             creator_id, recipient_id, cash_payer_id, offered_product_id, target_product_id,
             cash_amount_minor, cash_currency, currency_exponent, status
-         ) VALUES (1, 2, 1, 10, 20, :amount, :currency, :exponent, 'accepted')"
+         ) VALUES (1, 2, :payer, 10, 20, :amount, :currency, :exponent, 'accepted')"
     );
     $transactionInsert = $pdo->prepare(
         "INSERT INTO exchange_transactions (
             offer_id, creator_id, recipient_id, offered_product_id, target_product_id,
             cash_payer_id, cash_amount_minor, cash_currency, currency_exponent,
             payment_status, status
-         ) VALUES (:offer_id, 1, 2, 10, 20, 1, :amount, :currency, :exponent,
+         ) VALUES (:offer_id, 1, 2, 10, 20, :payer, :amount, :currency, :exponent,
                    :payment_status, 'in_progress')"
     );
     $transactions = [];
     foreach ([
-        [500, "USD", 2, "awaiting_method"],
-        [1250, "USD", 2, "awaiting_method"],
-        [900, "USD", 2, "awaiting_method"],
-        [0, null, null, "not_required"],
-        [700, "USD", 2, "awaiting_method"]
-    ] as $index => [$amount, $currency, $exponent, $paymentStatus]) {
+        [500, "USD", 2, "awaiting_method", 1],
+        [1250, "USD", 2, "awaiting_method", 1],
+        [900, "USD", 2, "awaiting_method", 1],
+        [0, null, null, "not_required", 1],
+        [700, "USD", 2, "awaiting_method", 1]
+    ] as $index => [$amount, $currency, $exponent, $paymentStatus, $payerId]) {
         $offerInsert->execute([
+            "payer" => $payerId,
             "amount" => $amount,
             "currency" => $currency,
             "exponent" => $exponent
@@ -269,6 +291,7 @@ try {
         $offerId = (int) $pdo->lastInsertId();
         $transactionInsert->execute([
             "offer_id" => $offerId,
+            "payer" => $payerId,
             "amount" => $amount,
             "currency" => $currency,
             "exponent" => $exponent,
@@ -300,6 +323,49 @@ try {
         "APPLY PAYMENT EVIDENCE MIGRATION 5"
     );
     payment_workflow_assert($exit === 0, "Version 5 fixture setup failed: {$stdout}{$stderr}");
+    $pdo->exec(
+        "CREATE TABLE handover_confirmations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL,
+            confirmation_type TEXT NOT NULL,
+            confirmer_id INTEGER NOT NULL,
+            confirmed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"
+    );
+    $pdo->exec(
+        "INSERT INTO schema_migrations (version) VALUES (6), (7), (8), (9), (10), (11)"
+    );
+    $pdo->exec(
+        "CREATE TRIGGER exchange_completion_guard
+         BEFORE UPDATE OF status ON exchange_transactions
+         FOR EACH ROW
+         WHEN OLD.status = 'in_progress' AND NEW.status = 'completed'
+         BEGIN
+             SELECT RAISE(ABORT, 'exchange completion requirements are not met');
+         END"
+    );
+    [$exit, $stdout, $stderr] = payment_workflow_migration(
+        $appRoot . DIRECTORY_SEPARATOR . "migrate_exchange_cash_difference.php",
+        $databasePath,
+        "APPLY EXCHANGE CASH DIFFERENCE MIGRATION 12"
+    );
+    payment_workflow_assert($exit === 0, "Version 12 fixture setup failed: {$stdout}{$stderr}");
+    $offerInsert->execute([
+        "payer" => 2,
+        "amount" => 800,
+        "currency" => "THB",
+        "exponent" => 2
+    ]);
+    $recipientPayerOfferId = (int) $pdo->lastInsertId();
+    $transactionInsert->execute([
+        "offer_id" => $recipientPayerOfferId,
+        "payer" => 2,
+        "amount" => 800,
+        "currency" => "THB",
+        "exponent" => 2,
+        "payment_status" => "awaiting_method"
+    ]);
+    $transactions[6] = (int) $pdo->lastInsertId();
 
     $csrfTokens = [
         1 => "workflow_creator_csrf",
@@ -396,6 +462,41 @@ try {
         $recipientSelectStatus === 403 && $invalidMethodStatus === 400,
         "Payment method authorization or allowlist validation failed."
     );
+    [$payerMethodStatus] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $recipientSession,
+        payment_workflow_fields($transactions[6], $recipientCsrf, "select_method", ["payment_method" => "promptpay"])
+    );
+    [$nonPayerMethodStatus] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $creatorSession,
+        payment_workflow_fields($transactions[6], $creatorCsrf, "select_method", ["payment_method" => "bank_transfer"])
+    );
+    payment_workflow_assert(
+        $payerMethodStatus === 200 && $nonPayerMethodStatus === 403,
+        "A recipient designated as payer could not select the method, or the other party was allowed to do so: "
+            . "{$payerMethodStatus}/{$nonPayerMethodStatus}; "
+            . (is_file($serverLog) ? file_get_contents($serverLog) : "")
+    );
+    [$payerPageStatus, $payerPage] = payment_workflow_request(
+        $baseUrl,
+        "/exchange_transaction.php?id=" . $transactions[6] . "&lang=en",
+        $recipientSession
+    );
+    [$nonPayerPageStatus, $nonPayerPage] = payment_workflow_request(
+        $baseUrl,
+        "/exchange_transaction.php?id=" . $transactions[6] . "&lang=en",
+        $creatorSession
+    );
+    payment_workflow_assert(
+        $payerPageStatus === 200
+            && $nonPayerPageStatus === 200
+            && str_contains($payerPage, "Payment slip")
+            && !str_contains($nonPayerPage, "Payment slip"),
+        "The exchange page did not expose payment actions to the recipient payer only."
+    );
     foreach ([
         [1, "promptpay"],
         [2, "bank_transfer"],
@@ -489,6 +590,68 @@ try {
             && $oversizedStatus === 400
             && $recipientUploadStatus === 403,
         "Upload presence, MIME, size, or creator-only authorization was not enforced."
+    );
+    $terms6 = payment_workflow_terms(800, "THB", 2);
+    [$wrongPayerSubmitStatus] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $creatorSession,
+        payment_workflow_fields($transactions[6], $creatorCsrf, "submit_evidence", $terms6),
+        $validPng
+    );
+    [$recipientPayerSubmitStatus, $recipientPayerSubmitBody] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $recipientSession,
+        payment_workflow_fields($transactions[6], $recipientCsrf, "submit_evidence", $terms6),
+        $validPng
+    );
+    $recipientPayerEvidence = $pdo->query(
+        "SELECT id, submitted_by FROM payment_evidence WHERE transaction_id = {$transactions[6]}"
+    )->fetch(PDO::FETCH_ASSOC);
+    payment_workflow_assert($recipientPayerEvidence !== false, "The recipient payer did not create an evidence record.");
+    [$reviewerPageStatus, $reviewerPage] = payment_workflow_request(
+        $baseUrl,
+        "/exchange_transaction.php?id=" . $transactions[6] . "&lang=en",
+        $creatorSession
+    );
+    [$payerReviewPageStatus, $payerReviewPage] = payment_workflow_request(
+        $baseUrl,
+        "/exchange_transaction.php?id=" . $transactions[6] . "&lang=en",
+        $recipientSession
+    );
+    payment_workflow_assert(
+        $reviewerPageStatus === 200
+            && $payerReviewPageStatus === 200
+            && str_contains($reviewerPage, "Verify payment")
+            && !str_contains($payerReviewPage, "Verify payment"),
+        "The exchange page did not expose evidence review to the participant other than the payer."
+    );
+    [$wrongPayerReviewStatus] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $recipientSession,
+        payment_workflow_fields($transactions[6], $recipientCsrf, "verify", [
+            "evidence_id" => (string) $recipientPayerEvidence["id"]
+        ])
+    );
+    [$otherParticipantReviewStatus, $otherParticipantReviewBody] = payment_workflow_request(
+        $baseUrl,
+        "/payment_action.php",
+        $creatorSession,
+        payment_workflow_fields($transactions[6], $creatorCsrf, "verify", [
+            "evidence_id" => (string) $recipientPayerEvidence["id"]
+        ])
+    );
+    payment_workflow_assert(
+        $wrongPayerSubmitStatus === 403
+            && $recipientPayerSubmitStatus === 200
+            && (int) $recipientPayerEvidence["submitted_by"] === 2
+            && $wrongPayerReviewStatus === 403
+            && $otherParticipantReviewStatus === 200
+            && $pdo->query("SELECT payment_status FROM exchange_transactions WHERE id = {$transactions[6]}")->fetchColumn() === "verified",
+        "Recipient-paid THB evidence did not enforce payer submission and other-party review: "
+            . "{$recipientPayerSubmitStatus}/{$otherParticipantReviewStatus}; {$recipientPayerSubmitBody}{$otherParticipantReviewBody}"
     );
     [$submitStatus, $submitBody] = payment_workflow_request(
         $baseUrl,
@@ -655,15 +818,17 @@ try {
     );
     [$cashPendingPageStatus, $cashPendingPage] = payment_workflow_request(
         $baseUrl,
-        "/exchange_transaction.php?id=" . $transactions[3],
+        "/exchange_transaction.php?id=" . $transactions[3] . "&lang=en",
         $recipientSession
     );
     payment_workflow_assert(
         $cashPendingPageStatus === 200
-            && str_contains($cashPendingPage, "Awaiting recipient receipt confirmation")
+            && str_contains($cashPendingPage, "Awaiting confirmation from the other participant")
             && str_contains($cashPendingPage, "Submitted by Creator at")
             && !str_contains($cashPendingPage, "Payment status: Verified"),
-        "Unconfirmed cash was presented as paid or omitted its submitter history."
+        "Unconfirmed cash was presented as paid or omitted its submitter history: "
+            . $cashPendingPageStatus . " " . $cashPendingPage . "; "
+            . (is_file($serverLog) ? file_get_contents($serverLog) : "")
     );
     [$cashCreatorVerifyStatus] = payment_workflow_request(
         $baseUrl,
@@ -728,7 +893,7 @@ try {
     );
     [$cashPageStatus, $cashPage] = payment_workflow_request(
         $baseUrl,
-        "/exchange_transaction.php?id=" . $transactions[3],
+        "/exchange_transaction.php?id=" . $transactions[3] . "&lang=en",
         $recipientSession
     );
     payment_workflow_assert(
@@ -736,7 +901,7 @@ try {
             && str_contains($cashPage, "Cash on handover")
             && str_contains($cashPage, "Receipt confirmed by Recipient at")
             && str_contains($cashPage, "Submitted by Creator at")
-            && str_contains($cashPage, "Receipt confirmed by recipient"),
+            && str_contains($cashPage, "Receipt confirmed by the other participant"),
         "The chat page did not display cash confirmation history."
     );
     [$cashDisputeStatus] = payment_workflow_request(
@@ -751,7 +916,7 @@ try {
     );
     [$cashDisputedPageStatus, $cashDisputedPage] = payment_workflow_request(
         $baseUrl,
-        "/exchange_transaction.php?id=" . $transactions[3],
+        "/exchange_transaction.php?id=" . $transactions[3] . "&lang=en",
         $recipientSession
     );
     payment_workflow_assert(
@@ -978,7 +1143,7 @@ try {
 
     [$pageStatus, $page] = payment_workflow_request(
         $baseUrl,
-        "/exchange_transaction.php?id=" . $transactions[1],
+        "/exchange_transaction.php?id=" . $transactions[1] . "&lang=en",
         $creatorSession
     );
     payment_workflow_assert(

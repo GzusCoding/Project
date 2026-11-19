@@ -183,13 +183,15 @@ try {
             cash_amount_minor INTEGER NOT NULL,
             cash_currency TEXT NULL,
             currency_exponent INTEGER NULL,
+            offered_price_minor INTEGER NULL,
+            target_price_minor INTEGER NULL,
             status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'superseded', 'expired')),
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             responded_at DATETIME NULL,
             CHECK (creator_id <> recipient_id),
-            CHECK (cash_payer_id = creator_id),
+            CHECK (cash_payer_id IN (creator_id, recipient_id)),
             CHECK (offered_product_id <> target_product_id),
             FOREIGN KEY (creator_id) REFERENCES users(id),
             FOREIGN KEY (recipient_id) REFERENCES users(id),
@@ -259,7 +261,9 @@ try {
         [60, 2, "Rollback target", "Rollback description", "active", "exchange"],
         [70, 2, "Inactive target", "Inactive description", "inactive", "exchange"],
         [80, 2, "Buy-only target", "Buy-only description", "active", "buy"],
-        [90, 1, "Already reserved", "Reserved description", "reserved", "exchange"]
+        [90, 1, "Already reserved", "Reserved description", "reserved", "exchange"],
+        [100, 1, "Recipient payer offered", "Payer fixture", "active", "exchange"],
+        [200, 2, "Recipient payer target", "Payer target fixture", "active", "exchange"]
     ] as [$id, $ownerId, $name, $description, $status, $type]) {
         $insertProduct->execute([
             "id" => $id,
@@ -303,6 +307,12 @@ try {
             "status" => $status
         ]);
     }
+    $pdo->exec(
+        "INSERT INTO offers (
+            id, creator_id, recipient_id, cash_payer_id, offered_product_id,
+            target_product_id, cash_amount_minor, cash_currency, currency_exponent, status
+         ) VALUES (14, 1, 2, 2, 100, 200, 250, 'THB', 2, 'pending')"
+    );
     $pdo->exec(
         "UPDATE offers
          SET cash_amount_minor = 250, cash_currency = 'USD', currency_exponent = 2
@@ -549,7 +559,7 @@ try {
 
     [$status, $creatorDetail] = offer_acceptance_request(
         $baseUrl,
-        "/offer_detail.php?id=1",
+        "/offer_detail.php?id=1&lang=en",
         $sessions[1]
     );
     offer_acceptance_assert(
@@ -560,7 +570,7 @@ try {
     );
     [$status, $recipientDetail] = offer_acceptance_request(
         $baseUrl,
-        "/offer_detail.php?id=1",
+        "/offer_detail.php?id=1&lang=en",
         $sessions[2]
     );
     offer_acceptance_assert(
@@ -640,7 +650,7 @@ try {
     );
     [$status, $acceptedDetail] = offer_acceptance_request(
         $baseUrl,
-        "/offer_detail.php?id=1",
+        "/offer_detail.php?id=1&lang=en",
         $sessions[2]
     );
     offer_acceptance_assert(
@@ -656,7 +666,7 @@ try {
     );
     [$status, $acceptedOfferList] = offer_acceptance_request(
         $baseUrl,
-        "/my_offers.php?section=incoming&status=accepted",
+        "/my_offers.php?section=incoming&status=accepted&lang=en",
         $sessions[2]
     );
     offer_acceptance_assert(
@@ -669,7 +679,7 @@ try {
     );
     [$status, $legacyDetail] = offer_acceptance_request(
         $baseUrl,
-        "/offer_detail.php?id=6",
+        "/offer_detail.php?id=6&lang=en",
         $sessions[1]
     );
     offer_acceptance_assert(
@@ -680,7 +690,7 @@ try {
     );
     [$status, $transactionDetail] = offer_acceptance_request(
         $baseUrl,
-        "/exchange_transaction.php?id=" . (int) $transaction["id"],
+        "/exchange_transaction.php?id=" . (int) $transaction["id"] . "&lang=en",
         $sessions[1]
     );
     offer_acceptance_assert(
@@ -703,6 +713,20 @@ try {
             && $pdo->query("SELECT user_id FROM products WHERE id = 20")->fetchColumn() === 2
             && $pdo->query("SELECT status FROM offers WHERE id = 1")->fetchColumn() === "accepted",
         "A repeated acceptance transferred products again."
+    );
+    [$status] = offer_acceptance_post($baseUrl, $sessions[2], $tokens[2], 14);
+    $recipientPayerTransaction = $pdo->query(
+        "SELECT cash_payer_id, cash_amount_minor, cash_currency, currency_exponent
+         FROM exchange_transactions WHERE offer_id = 14"
+    )->fetch(PDO::FETCH_ASSOC);
+    offer_acceptance_assert(
+        $status === 303
+            && $recipientPayerTransaction !== false
+            && (int) $recipientPayerTransaction["cash_payer_id"] === 2
+            && (int) $recipientPayerTransaction["cash_amount_minor"] === 250
+            && $recipientPayerTransaction["cash_currency"] === "THB"
+            && (int) $recipientPayerTransaction["currency_exponent"] === 2,
+        "Accepting an offer did not carry the recipient's payer role into the transaction."
     );
 
     fwrite(STDOUT, "Offer acceptance integration tests passed.\n");

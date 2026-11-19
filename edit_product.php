@@ -1,6 +1,7 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/category_support.php";
 
 require_authenticated_user();
 
@@ -39,25 +40,19 @@ if ($product["status"] === "reserved" || (int) $product["is_reserved"] === 1) {
     exit("This product is reserved for an exchange and cannot be edited.");
 }
 
-$categories = [
-    "electronics" => "Electronics",
-    "fashion" => "Fashion",
-    "home_living" => "Home & Living",
-    "books" => "Books",
-    "sports_outdoors" => "Sports & Outdoors",
-    "games_collectibles" => "Games & Collectibles",
-    "other" => "Other"
-];
+$categories = marketplace_category_labels($pdo);
 $transactionTypes = [
     "buy" => "Buy",
     "exchange" => "Exchange",
     "both" => "Buy or exchange"
 ];
+$transactionTypes = array_map("t", $transactionTypes);
 $conditions = [
     "new" => "New",
     "like_new" => "Like new",
     "used" => "Used"
 ];
+$conditions = array_map("t", $conditions);
 $values = [
     "name" => (string) $product["name"],
     "description" => (string) ($product["description"] ?? ""),
@@ -303,12 +298,12 @@ if ($_SERVER["REQUEST_METHOD"] !== "GET" && $_SERVER["REQUEST_METHOD"] !== "POST
 }
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fffaf5">
-    <title>Edit product | Buy &amp; Exchange</title>
+    <title><?= $escape(t("Edit product")) ?> | Buy &amp; Exchange</title>
     <style>
         :root {
             font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -343,42 +338,43 @@ if ($_SERVER["REQUEST_METHOD"] !== "GET" && $_SERVER["REQUEST_METHOD"] !== "POST
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
 <main>
     <header>
-        <h1>Edit product</h1>
-        <a class="button" href="my_products.php">Back to my products</a>
+        <h1><?= $escape(t("Edit product")) ?></h1>
+        <a class="button" href="my_products.php"><?= $escape(t("Back to my products")) ?></a>
     </header>
     <?php if ($errors !== []): ?>
         <ul class="errors" role="alert">
-            <?php foreach ($errors as $error): ?><li><?= $escape($error) ?></li><?php endforeach; ?>
+            <?php foreach ($errors as $error): ?><li><?= $escape(t($error)) ?></li><?php endforeach; ?>
         </ul>
     <?php endif; ?>
     <form method="POST" action="edit_product.php?id=<?= (int) $productId ?>" enctype="multipart/form-data" class="card">
         <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
         <div class="fields">
             <div class="wide">
-                <label for="name">Name</label>
+                <label for="name"><?= $escape(t("Product name")) ?></label>
                 <input id="name" name="name" maxlength="200" required value="<?= $escape($values["name"]) ?>">
             </div>
             <div class="wide">
-                <label for="description">Description</label>
+                <label for="description"><?= $escape(t("Description")) ?></label>
                 <textarea id="description" name="description" maxlength="5000" required><?= $escape($values["description"]) ?></textarea>
             </div>
             <div>
-                <label for="price">Price</label>
+                <label for="price"><?= $escape(t("Price")) ?></label>
                 <input id="price" name="price" type="number" min="0.01" step="0.01" required value="<?= $escape($values["price"]) ?>">
             </div>
             <div>
-                <label for="category">Category</label>
+                <label for="category"><?= $escape(t("Category")) ?></label>
                 <select id="category" name="category" required>
-                    <option value="">Choose a category</option>
+                    <option value=""><?= $escape(t("Choose a category")) ?></option>
                     <?php foreach ($categories as $value => $label): ?>
                         <option value="<?= $escape($value) ?>"<?= $values["category"] === $value ? " selected" : "" ?>><?= $escape($label) ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div>
-                <label for="transaction_type">Transaction type</label>
+                <label for="transaction_type"><?= $escape(t("Transaction type")) ?></label>
                 <select id="transaction_type" name="transaction_type" required>
                     <?php foreach ($transactionTypes as $value => $label): ?>
                         <option value="<?= $escape($value) ?>"<?= $values["transaction_type"] === $value ? " selected" : "" ?>><?= $escape($label) ?></option>
@@ -386,27 +382,27 @@ if ($_SERVER["REQUEST_METHOD"] !== "GET" && $_SERVER["REQUEST_METHOD"] !== "POST
                 </select>
             </div>
             <div>
-                <label for="item_condition">Item condition</label>
+                <label for="item_condition"><?= $escape(t("Item condition")) ?></label>
                 <select id="item_condition" name="item_condition" required>
-                    <option value="">Choose condition</option>
+                    <option value=""><?= $escape(t("Choose condition")) ?></option>
                     <?php foreach ($conditions as $value => $label): ?>
                         <option value="<?= $escape($value) ?>"<?= $values["item_condition"] === $value ? " selected" : "" ?>><?= $escape($label) ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="wide">
-                <label for="product_image">Replace image (optional)</label>
+                <label for="product_image"><?= $escape(t("Replace image (optional)")) ?></label>
                 <input id="product_image" name="product_image" type="file" accept="image/jpeg,image/png,image/webp">
-                <p class="help">JPEG, PNG, or WebP; maximum 5 MB. Leave empty to keep the current image.</p>
+                <p class="help"><?= $escape(t("JPEG, PNG, or WebP; maximum 5 MB. Leave empty to keep the current image.")) ?></p>
                 <?php if ((string) $product["image"] !== ""): ?>
-                    <p class="muted">Current image</p>
+                    <p class="muted"><?= $escape(t("Current image")) ?></p>
                     <img class="current-image" src="<?= $escape($product["image"]) ?>" alt="<?= $escape($product["name"]) ?>">
                 <?php endif; ?>
             </div>
         </div>
         <div class="actions">
-            <a class="button" href="my_products.php">Cancel</a>
-            <button class="button button--primary" type="submit">Save changes</button>
+            <a class="button" href="my_products.php"><?= $escape(t("Cancel")) ?></a>
+            <button class="button button--primary" type="submit"><?= $escape(t("Save changes")) ?></button>
         </div>
     </form>
 </main>

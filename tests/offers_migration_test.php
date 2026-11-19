@@ -114,7 +114,10 @@ try {
         throw new RuntimeException("Could not create the disposable database directory.");
     }
     $createdTemporaryRoot = true;
-    if (!copy($projectRoot . DIRECTORY_SEPARATOR . "migrate_offers.php", $migrationPath)) {
+    if (!copy(
+        $projectRoot . DIRECTORY_SEPARATOR . "migrations" . DIRECTORY_SEPARATOR . "migrate_offers.php",
+        $migrationPath
+    )) {
         throw new RuntimeException("Could not prepare an isolated migration copy.");
     }
 

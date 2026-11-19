@@ -32,7 +32,7 @@ try {
             )"
         );
     } elseif ($driver === "sqlite") {
-        $dbPath = getenv("DB_PATH") ?: __DIR__ . "/hybrid_marketplace.sqlite";
+        $dbPath = getenv("DB_PATH") ?: dirname(__DIR__) . "/hybrid_marketplace.sqlite";
         $pdo = new PDO("sqlite:" . $dbPath);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $pdo->exec("PRAGMA foreign_keys = ON");

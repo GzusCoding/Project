@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
-require_once __DIR__ . "/payment_support.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/payment_support.php";
+require_once __DIR__ . "/includes/exchange_completion_support.php";
 
 if (($_SERVER["REQUEST_METHOD"] ?? "") !== "POST") {
     header("Allow: POST");
@@ -16,6 +17,9 @@ if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== "sqlite") {
 $userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
 if ($userId === false || $userId === null || $userId <= 0) {
     payment_json_response(["error" => "Authentication required."], 401);
+}
+if (!user_account_is_active($pdo, (int) $userId)) {
+    payment_json_response(["error" => "This account is suspended or unavailable."], 403);
 }
 $roleStmt = $pdo->prepare("SELECT role FROM users WHERE id = :id");
 $roleStmt->execute(["id" => $userId]);
@@ -92,9 +96,15 @@ try {
     if ($stmt->rowCount() !== 1) {
         throw new DomainException("The transaction could not be updated.", 409);
     }
-    $pdo->commit();
+    $exchangeCompleted = $resolution === "in_progress"
+        && exchange_complete_if_ready($pdo, (int) $transactionId);
+    payment_commit($pdo);
     $transactionStarted = false;
-    payment_json_response(["success" => true, "message" => "The dispute decision and audit record were saved."]);
+    payment_json_response([
+        "success" => true,
+        "message" => "The dispute decision and audit record were saved.",
+        "exchange_completed" => $exchangeCompleted
+    ]);
 } catch (DomainException $e) {
     if ($transactionStarted) {
         payment_rollback($pdo);

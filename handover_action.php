@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
-require_once __DIR__ . "/handover_support.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/handover_support.php";
+require_once __DIR__ . "/includes/exchange_completion_support.php";
 
 header("X-Content-Type-Options: nosniff");
 header("Cache-Control: no-store, private");
@@ -19,6 +20,9 @@ if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== "sqlite") {
 $userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
 if ($userId === false || $userId === null || $userId <= 0) {
     handover_json_response(["error" => "Authentication required."], 401);
+}
+if (!user_account_is_active($pdo, (int) $userId)) {
+    handover_json_response(["error" => "This account is suspended or unavailable."], 403);
 }
 if (!csrf_token_is_valid()) {
     handover_json_response(["error" => "Your request could not be verified. Reload the page and try again."], 400);
@@ -103,13 +107,15 @@ try {
         }
     }
 
+    $completed = exchange_complete_if_ready($pdo, $transactionId);
     $state = handover_confirmation_state($pdo, $transactionId);
-    $pdo->commit();
+    $pdo->exec("COMMIT");
     $transactionStarted = false;
     handover_json_response([
         "success" => true,
         "confirmation" => $confirmation,
-        "confirmations" => $state
+        "confirmations" => $state,
+        "completed" => $completed
     ]);
 } catch (DomainException $e) {
     if ($transactionStarted) {

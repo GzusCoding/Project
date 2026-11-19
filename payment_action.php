@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
-require_once __DIR__ . "/payment_support.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
+require_once __DIR__ . "/includes/payment_support.php";
+require_once __DIR__ . "/includes/exchange_completion_support.php";
 
 header("X-Content-Type-Options: nosniff");
 header("Cache-Control: no-store, private");
@@ -19,6 +20,9 @@ if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== "sqlite") {
 $userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
 if ($userId === false || $userId === null || $userId <= 0) {
     payment_json_response(["error" => "Authentication required."], 401);
+}
+if (!user_account_is_active($pdo, (int) $userId)) {
+    payment_json_response(["error" => "This account is suspended or unavailable."], 403);
 }
 if (!csrf_token_is_valid()) {
     payment_json_response(["error" => "Your request could not be verified. Reload the page and try again."], 400);
@@ -43,8 +47,8 @@ try {
     }
 
     if ($action === "select_method") {
-        if ((int) $transaction["creator_id"] !== $userId) {
-            throw new DomainException("Only the transaction creator can select the payment method.", 403);
+        if ((int) $transaction["cash_payer_id"] !== $userId) {
+            throw new DomainException("Only the designated cash payer can select the payment method.", 403);
         }
         if (
             $transaction["status"] !== "in_progress"
@@ -75,8 +79,8 @@ try {
             throw new DomainException("The payment method could not be selected.", 409);
         }
     } elseif ($action === "submit_evidence" || $action === "cash_paid") {
-        if ((int) $transaction["creator_id"] !== $userId) {
-            throw new DomainException("Only the transaction creator can submit payment.", 403);
+        if ((int) $transaction["cash_payer_id"] !== $userId) {
+            throw new DomainException("Only the designated cash payer can submit payment.", 403);
         }
         if ($transaction["status"] !== "in_progress") {
             throw new DomainException("Payment is unavailable while this transaction is not in progress.", 409);
@@ -185,8 +189,11 @@ try {
             throw new DomainException("Payment could not be submitted in the current state.", 409);
         }
     } elseif ($action === "verify" || $action === "reject") {
-        if ((int) $transaction["recipient_id"] !== $userId) {
-            throw new DomainException("Only the transaction recipient can review payment.", 403);
+        $paymentReviewerId = (int) $transaction["cash_payer_id"] === (int) $transaction["creator_id"]
+            ? (int) $transaction["recipient_id"]
+            : (int) $transaction["creator_id"];
+        if ($paymentReviewerId !== $userId) {
+            throw new DomainException("Only the other transaction participant can review payment.", 403);
         }
         if ($transaction["status"] !== "in_progress" || $transaction["payment_status"] !== "submitted") {
             throw new DomainException("Payment review is unavailable in the current state.", 409);
@@ -245,9 +252,14 @@ try {
         throw new DomainException("Invalid payment action.", 400);
     }
 
-    $pdo->commit();
+    $exchangeCompleted = exchange_complete_if_ready($pdo, $transactionId);
+    payment_commit($pdo);
     $transactionStarted = false;
-    payment_json_response(["success" => true, "message" => "Payment update saved."]);
+    payment_json_response([
+        "success" => true,
+        "message" => "Payment update saved.",
+        "exchange_completed" => $exchangeCompleted
+    ]);
 } catch (DomainException $e) {
     if ($transactionStarted) {
         payment_rollback($pdo);

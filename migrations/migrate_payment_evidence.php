@@ -212,7 +212,11 @@ function payment_migration_verify(PDO $pdo): void
 }
 
 $driver = getenv("DB_DRIVER") ?: "sqlite";
-$projectRoot = realpath(__DIR__);
+$scriptDirectory = realpath(__DIR__);
+$projectRoot = $scriptDirectory !== false
+    && is_file($scriptDirectory . DIRECTORY_SEPARATOR . "hybrid_marketplace.sqlite")
+    ? $scriptDirectory
+    : realpath(dirname(__DIR__));
 $expectedPath = $projectRoot . DIRECTORY_SEPARATOR . "hybrid_marketplace.sqlite";
 $configuredPath = getenv("DB_PATH") ?: $expectedPath;
 $resolvedPath = realpath($configuredPath);

@@ -29,6 +29,9 @@ function my_offers_session(string $path, string $id, int $userId): void
 
 function my_offers_request(string $baseUrl, string $path, ?string $sessionId): array
 {
+    if (str_starts_with($path, "/my_offers.php")) {
+        $path .= (str_contains($path, "?") ? "&" : "?") . "lang=en";
+    }
     $headers = ["Connection: close"];
     if ($sessionId !== null) {
         $headers[] = "Cookie: PHPSESSID=" . $sessionId;
@@ -120,6 +123,8 @@ try {
                 CHECK (typeof(cash_amount_minor) = 'integer' AND cash_amount_minor >= 0),
             cash_currency TEXT NULL,
             currency_exponent INTEGER NULL,
+            offered_price_minor INTEGER NULL,
+            target_price_minor INTEGER NULL,
             status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'superseded', 'expired')),
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -166,6 +171,19 @@ try {
             offer_id INTEGER NOT NULL UNIQUE,
             status TEXT NOT NULL,
             payment_status TEXT NOT NULL
+        )"
+    );
+    $pdo->exec(
+        "CREATE TABLE buy_orders (
+            id INTEGER PRIMARY KEY,
+            buyer_id INTEGER NOT NULL,
+            seller_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            product_name TEXT NOT NULL,
+            price_minor INTEGER NOT NULL,
+            payment_method TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )"
     );
     $pdo->exec(
@@ -228,6 +246,14 @@ try {
         "status" => "pending",
         "created_at" => "2026-01-02 00:00:00"
     ]);
+    $pdo->exec(
+        "INSERT INTO buy_orders (
+            id, buyer_id, seller_id, product_id, product_name, price_minor,
+            payment_method, status, created_at
+         ) VALUES
+            (1, 1, 2, 20, 'Recipient item', 15000, 'promptpay', 'in_progress', '2026-01-03 00:00:00'),
+            (2, 2, 1, 10, 'Creator item', 20000, 'bank_transfer', 'completed', '2026-01-04 00:00:00')"
+    );
 
     $socket = stream_socket_server("tcp://127.0.0.1:0", $errno, $error);
     if ($socket === false) {
@@ -287,6 +313,34 @@ try {
         "Guest was not redirected to login."
     );
 
+    [$status, $allForCreator] = my_offers_request($baseUrl, "/my_offers.php", $creatorSession);
+    preg_match_all('/<article class="offer">(.*?)<\/article>/s', $allForCreator, $allCreatorRows);
+    my_offers_assert(
+        $status === 200
+            && count($allCreatorRows[1]) === 7
+            && str_contains($allForCreator, "Outgoing Offer")
+            && str_contains($allForCreator, "Incoming Offer")
+            && str_contains($allForCreator, "Purchase (you are the buyer)")
+            && str_contains($allForCreator, "Sale (you are the seller)")
+            && str_contains($allForCreator, 'name="section" value="all"'),
+        "The default activity list did not show exchange offers and purchases or sales."
+    );
+    preg_match_all('/<article class="buy-order">(.*?)<\/article>/s', $allForCreator, $creatorOrders);
+    my_offers_assert(
+        count($creatorOrders[1]) === 2
+            && str_contains($allForCreator, "Recipient item")
+            && str_contains($allForCreator, "Creator item")
+            && str_contains($allForCreator, "View order"),
+        "The buyer and seller orders were not included in the activity list."
+    );
+    [$status, $allForRecipient] = my_offers_request($baseUrl, "/my_offers.php", $recipientSession);
+    preg_match_all('/<article class="offer">(.*?)<\/article>/s', $allForRecipient, $allRecipientRows);
+    preg_match_all('/<article class="buy-order">(.*?)<\/article>/s', $allForRecipient, $recipientOrders);
+    my_offers_assert(
+        $status === 200 && count($allRecipientRows[1]) === 7 && count($recipientOrders[1]) === 2,
+        "The recipient could not see activity from both buyer and seller roles."
+    );
+
     [$status, $incoming] = my_offers_request(
         $baseUrl,
         "/my_offers.php?section=incoming&status=all",
@@ -321,6 +375,11 @@ try {
         "Incoming offers were not ordered newest first."
     );
     my_offers_assert(
+        str_contains($incoming, "Sale (you are the seller)")
+            && str_contains($incoming, "Order status: In progress"),
+        "Incoming purchase orders were not identified as sales."
+    );
+    my_offers_assert(
         str_contains($incoming, 'name="section" value="incoming"')
             && str_contains($incoming, 'value="rejected"'),
         "The selected section or status filter was not preserved in the form."
@@ -332,6 +391,10 @@ try {
         $creatorSession
     );
     my_offers_assert($status === 200 && str_contains($outgoing, "Creator item"), "Creator could not load outgoing offers.");
+    my_offers_assert(
+        str_contains($outgoing, "Purchase (you are the buyer)"),
+        "Outgoing purchase orders were not identified as purchases."
+    );
     my_offers_assert(
         str_contains($outgoing, "offer_detail.php?id=1&amp;section=outgoing&amp;status=all"),
         "Offer detail link did not preserve the current section and filter."
@@ -346,6 +409,7 @@ try {
     my_offers_assert(
         $status === 200
             && count($filteredRows[1]) === 1
+            && !str_contains($filtered, 'class="buy-order"')
             && str_contains($filteredRows[1][0], "Rejected"),
         "Status filtering did not limit the offer rows."
     );
@@ -360,8 +424,15 @@ try {
         "/my_offers.php?section=incoming",
         $unrelatedSession
     );
-    my_offers_assert($status === 200 && str_contains($empty, "No incoming offers"), "Empty offer list was not handled.");
+    my_offers_assert($status === 200 && str_contains($empty, "No incoming activity"), "Empty activity filter was not handled.");
     my_offers_assert(!str_contains($empty, "Creator item"), "Unrelated user could see another user's offers.");
+    [$status, $emptyAll] = my_offers_request($baseUrl, "/my_offers.php", $unrelatedSession);
+    my_offers_assert(
+        $status === 200
+            && str_contains($emptyAll, "No offers or orders yet")
+            && str_contains($emptyAll, "Browse products"),
+        "The default empty activity view did not explain how to start."
+    );
     [$status, $forgedUser] = my_offers_request(
         $baseUrl,
         "/my_offers.php?section=incoming&user_id=2",
@@ -387,6 +458,29 @@ try {
             && str_contains($detail, "section=outgoing&amp;status=accepted"),
         "Detail page did not preserve return section and filter."
     );
+    [$status, $allDetail] = my_offers_request(
+        $baseUrl,
+        "/offer_detail.php?id=1&section=all&status=all",
+        $creatorSession
+    );
+    my_offers_assert(
+        $status === 200 && str_contains($allDetail, "section=all&amp;status=all"),
+        "Offer details did not preserve the all-offers return view."
+    );
+    foreach (["in_progress", "completed"] as $orderStatus) {
+        [$status, $filteredOrders] = my_offers_request(
+            $baseUrl,
+            "/my_offers.php?section=all&status=" . $orderStatus,
+            $creatorSession
+        );
+        preg_match_all('/<article class="buy-order">(.*?)<\/article>/s', $filteredOrders, $orderRows);
+        my_offers_assert(
+            $status === 200
+                && count($orderRows[1]) === 1
+                && str_contains($orderRows[1][0], "Order status: " . ucfirst(str_replace("_", " ", $orderStatus))),
+            "The {$orderStatus} purchase/sale filter did not work."
+        );
+    }
     my_offers_assert(
         !str_contains($detail, "<script>alert(1)</script>")
             && str_contains($detail, "&lt;script&gt;alert(1)&lt;/script&gt;"),

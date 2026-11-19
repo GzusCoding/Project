@@ -1,6 +1,6 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
 
 require_authenticated_user();
 
@@ -88,12 +88,12 @@ $escape = static fn ($value): string => htmlspecialchars(
 );
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fffaf5">
-    <title>Deactivate product | Buy &amp; Exchange</title>
+    <title><?= $escape(t("Deactivate")) ?> | Buy &amp; Exchange</title>
     <style>
         :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #24211f; background: #fffaf5; }
         * { box-sizing: border-box; }
@@ -106,19 +106,20 @@ $escape = static fn ($value): string => htmlspecialchars(
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
 <main>
-    <h1>Deactivate product?</h1>
-    <p>This will hide <strong><?= $escape($product["name"]) ?></strong> from public listings. The product and its image will not be deleted.</p>
-    <?php if (isset($error)): ?><p class="error" role="alert"><?= $escape($error) ?></p><?php endif; ?>
+    <h1><?= $escape(t("Deactivate product?")) ?></h1>
+    <p><?= $escape(t("This will hide")) ?> <strong><?= $escape($product["name"]) ?></strong> <?= $escape(t("from public listings. The product and its image will not be deleted.")) ?></p>
+    <?php if (isset($error)): ?><p class="error" role="alert"><?= $escape(t($error)) ?></p><?php endif; ?>
     <?php if ($isReserved): ?>
-        <p>This product is reserved for an exchange and cannot be deactivated.</p>
-        <a class="button" href="my_products.php">Back to my products</a>
+        <p><?= $escape(t("This product is reserved for an exchange and cannot be deactivated.")) ?></p>
+        <a class="button" href="my_products.php"><?= $escape(t("Back to my products")) ?></a>
     <?php else: ?>
         <form method="POST" action="deactivate_product.php?id=<?= (int) $productId ?>">
             <input type="hidden" name="csrf_token" value="<?= $escape(csrf_token()) ?>">
             <div class="actions">
-                <a class="button" href="my_products.php">Cancel</a>
-                <button class="button danger" type="submit" name="confirm_deactivation" value="1">Confirm deactivation</button>
+                <a class="button" href="my_products.php"><?= $escape(t("Cancel")) ?></a>
+                <button class="button danger" type="submit" name="confirm_deactivation" value="1"><?= $escape(t("Confirm deactivation")) ?></button>
             </div>
         </form>
     <?php endif; ?>

@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . "/security.php";
-require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
 
 require_authenticated_user();
 $userId = filter_var($_SESSION["user_id"] ?? null, FILTER_VALIDATE_INT);
@@ -95,7 +95,7 @@ if ($action === "accept") {
             || $creatorId <= 0
             || $recipientId <= 0
             || $creatorId === $recipientId
-            || (int) $offer["cash_payer_id"] !== $creatorId
+            || !in_array((int) $offer["cash_payer_id"], [$creatorId, $recipientId], true)
             || (int) $offer["cash_amount_minor"] < 0
         ) {
             throw new DomainException("The offer no longer meets the exchange rules.");
@@ -166,7 +166,7 @@ if ($action === "accept") {
             "recipient_id" => $recipientId,
             "offered_product_id" => $offeredProductId,
             "target_product_id" => $targetProductId,
-            "cash_payer_id" => $creatorId,
+            "cash_payer_id" => (int) $offer["cash_payer_id"],
             "cash_amount_minor" => (int) $offer["cash_amount_minor"],
             "cash_currency" => $offer["cash_currency"],
             "currency_exponent" => $offer["currency_exponent"],

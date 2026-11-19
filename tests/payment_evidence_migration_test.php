@@ -108,7 +108,10 @@ try {
         "migrate_payment_evidence.php"
     ];
     foreach ($scriptNames as $script) {
-        if (!copy($projectRoot . DIRECTORY_SEPARATOR . $script, $temporaryRoot . DIRECTORY_SEPARATOR . $script)) {
+        if (!copy(
+            $projectRoot . DIRECTORY_SEPARATOR . "migrations" . DIRECTORY_SEPARATOR . $script,
+            $temporaryRoot . DIRECTORY_SEPARATOR . $script
+        )) {
             throw new RuntimeException("Could not copy {$script} into the isolated test directory.");
         }
     }

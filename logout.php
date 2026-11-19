@@ -1,7 +1,7 @@
 
 <?php
 
-require_once __DIR__ . "/security.php";
+require_once __DIR__ . "/includes/security.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST" || !csrf_token_is_valid()) {
     http_response_code(400);

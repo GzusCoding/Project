@@ -71,6 +71,9 @@ session_id($argv[1]);
 $_SERVER["REQUEST_METHOD"] = $argv[2];
 $_POST = json_decode($argv[3], true, 512, JSON_THROW_ON_ERROR);
 $_GET = ["id" => $argv[4]];
+if (isset($_POST["lang"]) && is_string($_POST["lang"])) {
+    $_GET["lang"] = $_POST["lang"];
+}
 http_response_code(200);
 require $argv[5];
 PHP;
@@ -180,6 +183,9 @@ try {
         throw new RuntimeException("Could not create isolated handover test directories.");
     }
     $created = true;
+    if (!mkdir($appRoot . DIRECTORY_SEPARATOR . "includes", 0700)) {
+        throw new RuntimeException("Could not create isolated shared-code directory.");
+    }
     foreach ([
         "migrate_offers.php",
         "migrate_exchange_transactions.php",
@@ -188,11 +194,26 @@ try {
         "migrate_handover_confirmations.php",
         "db.php",
         "security.php",
+        "i18n.php",
         "handover_support.php",
+        "notification_support.php",
+        "exchange_completion_support.php",
         "handover_action.php",
         "exchange_transaction.php"
     ] as $file) {
-        if (!copy($projectRoot . DIRECTORY_SEPARATOR . $file, $appRoot . DIRECTORY_SEPARATOR . $file)) {
+        $isMigration = str_starts_with($file, "migrate_");
+        $isSharedCode = in_array($file, [
+            "db.php", "security.php", "i18n.php", "handover_support.php",
+            "notification_support.php", "exchange_completion_support.php"
+        ], true);
+        $sourceDirectory = $isMigration ? "migrations" : ($isSharedCode ? "includes" : null);
+        $sourcePath = $projectRoot . DIRECTORY_SEPARATOR
+            . ($sourceDirectory === null ? "" : $sourceDirectory . DIRECTORY_SEPARATOR)
+            . $file;
+        $targetPath = $appRoot . DIRECTORY_SEPARATOR
+            . ($isSharedCode ? "includes" . DIRECTORY_SEPARATOR : "")
+            . $file;
+        if (!copy($sourcePath, $targetPath)) {
             throw new RuntimeException("Could not copy {$file} into the isolated application.");
         }
     }
@@ -336,7 +357,10 @@ try {
         "handover-guest-session",
         $creatorForm
     );
-    handover_workflow_assert($guest[0] === 401, "An unauthenticated confirmation was accepted.");
+    handover_workflow_assert(
+        $guest[0] === 401,
+        "An unauthenticated confirmation was accepted ({$guest[0]}): {$guest[1]} {$guest[2]}"
+    );
     $missingCsrf = $creatorForm;
     unset($missingCsrf["csrf_token"]);
     $csrfResponse = handover_workflow_request(
@@ -516,7 +540,7 @@ try {
         "exchange_transaction.php",
         "GET",
         $sessions[1],
-        ["transaction_id" => (string) $concurrentTransactionId]
+        ["transaction_id" => (string) $concurrentTransactionId, "lang" => "en"]
     );
     handover_workflow_assert(
         $creatorView[0] === 200
@@ -565,11 +589,11 @@ try {
         "exchange_transaction.php",
         "GET",
         $sessions[2],
-        ["transaction_id" => (string) $concurrentTransactionId]
+        ["transaction_id" => (string) $concurrentTransactionId, "lang" => "en"]
     );
     handover_workflow_assert(
         $disputedView[0] === 200
-            && str_contains($disputedView[1], "New handover confirmations are unavailable")
+            && str_contains($disputedView[1], "Handover confirmations are unavailable while this transaction is disputed.")
             && str_contains($disputedView[1], "Messages are visible only to these transaction participants.")
             && preg_match('/<textarea id="chat-message"[^>]*disabled/', $disputedView[1]) !== 1,
         "Dispute handling blocked chat or left handover confirmation actions enabled."

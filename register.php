@@ -1,6 +1,6 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once "db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
 
 $message = "";
 $registered = false;
@@ -12,6 +12,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif (
         !is_string($_POST["name"] ?? null)
         || !is_string($_POST["email"] ?? null)
+        || !is_string($_POST["phone"] ?? null)
+        || !is_string($_POST["address"] ?? null)
         || !is_string($_POST["password"] ?? null)
         || !is_string($_POST["confirm_password"] ?? null)
     ) {
@@ -19,6 +21,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } else {
         $name = trim($_POST["name"]);
         $email = trim($_POST["email"]);
+        $phone = trim($_POST["phone"]);
+        $address = trim($_POST["address"]);
         $password = $_POST["password"];
         $confirmPassword = $_POST["confirm_password"];
 
@@ -26,20 +30,29 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $message = "กรุณากรอกข้อมูลให้ครบทุกช่อง";
         } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $message = "รูปแบบอีเมลไม่ถูกต้อง";
+        } elseif (
+            preg_match('/\A(?=.*[0-9])[0-9+(). -]{7,32}\z/', $phone) !== 1
+            || strlen($phone) > 32
+        ) {
+            $message = "กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้อง";
+        } elseif (mb_strlen($address, "UTF-8") > 500) {
+            $message = "ที่อยู่ต้องมีความยาวไม่เกิน 500 ตัวอักษร";
         } elseif (strlen($password) < 8) {
             $message = "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร";
         } elseif ($password !== $confirmPassword) {
             $message = "รหัสผ่านทั้งสองช่องไม่ตรงกัน";
         } else {
             try {
-                $sql = "INSERT INTO users (name, email, password)
-                        VALUES (:name, :email, :password)";
+                $sql = "INSERT INTO users (name, email, password, phone, address)
+                        VALUES (:name, :email, :password, :phone, :address)";
                 $stmt = $pdo->prepare($sql);
 
                 $stmt->execute([
                     "name" => $name,
                     "email" => $email,
-                    "password" => password_hash($password, PASSWORD_DEFAULT)
+                    "password" => password_hash($password, PASSWORD_DEFAULT),
+                    "phone" => $phone,
+                    "address" => $address === "" ? null : $address
                 ]);
 
                 $message = "สมัครสมาชิกสำเร็จ! บัญชีของคุณพร้อมใช้งานแล้ว";
@@ -57,12 +70,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 }
 ?>
 <!DOCTYPE html>
-<html lang="th">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fff7ed">
-    <title>สร้างบัญชี | MARKETPLACE</title>
+    <title><?= htmlspecialchars(t("Create Account"), ENT_QUOTES, "UTF-8") ?> | MARKETPLACE</title>
     <style>
         :root {
             color-scheme: light;
@@ -517,18 +530,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
     <main class="stage">
         <div class="product-card product-card--bag" aria-hidden="true">
             <span class="product-emoji">👜</span>
-            <span class="product-info"><strong>Everyday tote</strong><span>฿ 890</span></span>
+            <span class="product-info"><strong><?= htmlspecialchars(t("Everyday tote"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 890</span></span>
         </div>
         <div class="product-card product-card--headphones" aria-hidden="true">
             <span class="product-emoji">🎧</span>
-            <span class="product-info"><strong>Studio sound</strong><span>฿ 2,490</span></span>
+            <span class="product-info"><strong><?= htmlspecialchars(t("Studio sound"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 2,490</span></span>
         </div>
         <div class="product-card product-card--sneakers" aria-hidden="true">
             <span class="product-emoji">👟</span>
-            <span class="product-info"><strong>Daily sneakers</strong><span>฿ 1,590</span></span>
+            <span class="product-info"><strong><?= htmlspecialchars(t("Daily sneakers"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 1,590</span></span>
         </div>
 
         <section class="register-card" aria-labelledby="register-title">
@@ -543,8 +557,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
 
             <header class="intro">
-                <h1 id="register-title">Create your account</h1>
-                <p>Discover. Shop. Enjoy.</p>
+                <h1 id="register-title"><?= htmlspecialchars(t("Create your account"), ENT_QUOTES, "UTF-8") ?></h1>
+                <p><?= htmlspecialchars(t("Discover. Shop. Enjoy."), ENT_QUOTES, "UTF-8") ?></p>
             </header>
 
             <?php if ($message !== ""): ?>
@@ -552,13 +566,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     class="form-message<?= $registered ? " form-message--success" : "" ?>"
                     role="<?= $registered ? "status" : "alert" ?>"
                 >
-                    <?= htmlspecialchars($message, ENT_QUOTES, "UTF-8") ?>
+                    <?= htmlspecialchars(t($message), ENT_QUOTES, "UTF-8") ?>
                 </p>
             <?php endif; ?>
 
             <?php if ($registered): ?>
                 <a class="submit-button" href="login.php">
-                    <span>Go to Login</span>
+                    <span><?= htmlspecialchars(t("Go to Login"), ENT_QUOTES, "UTF-8") ?></span>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M5 12h14"></path>
                         <path d="m13 6 6 6-6 6"></path>
@@ -568,7 +582,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <form method="POST" action="register.php">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, "UTF-8") ?>">
                     <div class="form-field">
-                        <label for="name">Your name</label>
+                        <label for="name"><?= htmlspecialchars(t("Your name"), ENT_QUOTES, "UTF-8") ?></label>
                         <div class="input-wrap">
                             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <circle cx="12" cy="8" r="4"></circle>
@@ -578,7 +592,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                 id="name"
                                 type="text"
                                 name="name"
-                                placeholder="Enter your name"
+                                placeholder="<?= htmlspecialchars(t("Enter your name"), ENT_QUOTES, "UTF-8") ?>"
                                 autocomplete="name"
                                 value="<?= htmlspecialchars($_POST["name"] ?? "", ENT_QUOTES, "UTF-8") ?>"
                                 required
@@ -587,7 +601,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
 
                     <div class="form-field">
-                        <label for="email">Email address</label>
+                        <label for="email"><?= htmlspecialchars(t("Email address"), ENT_QUOTES, "UTF-8") ?></label>
                         <div class="input-wrap">
                             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <rect x="3" y="5" width="18" height="14" rx="3"></rect>
@@ -606,7 +620,37 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
 
                     <div class="form-field">
-                        <label for="password">Password</label>
+                        <label for="phone"><?= htmlspecialchars(t("Phone number"), ENT_QUOTES, "UTF-8") ?></label>
+                        <div class="input-wrap">
+                            <input
+                                id="phone"
+                                type="tel"
+                                name="phone"
+                                placeholder="<?= htmlspecialchars(t("Phone number"), ENT_QUOTES, "UTF-8") ?>"
+                                autocomplete="tel"
+                                value="<?= htmlspecialchars($_POST["phone"] ?? "", ENT_QUOTES, "UTF-8") ?>"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-field">
+                        <label for="address"><?= htmlspecialchars(t("Address"), ENT_QUOTES, "UTF-8") ?></label>
+                        <div class="input-wrap">
+                            <input
+                                id="address"
+                                type="text"
+                                name="address"
+                                placeholder="<?= htmlspecialchars(t("Address (optional)"), ENT_QUOTES, "UTF-8") ?>"
+                                autocomplete="street-address"
+                                maxlength="500"
+                                value="<?= htmlspecialchars($_POST["address"] ?? "", ENT_QUOTES, "UTF-8") ?>"
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-field">
+                        <label for="password"><?= htmlspecialchars(t("Password"), ENT_QUOTES, "UTF-8") ?></label>
                         <div class="input-wrap">
                             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <rect x="4" y="10" width="16" height="11" rx="2.5"></rect>
@@ -616,12 +660,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                 id="password"
                                 type="password"
                                 name="password"
-                                placeholder="At least 8 characters"
+                                placeholder="<?= htmlspecialchars(t("At least 8 characters"), ENT_QUOTES, "UTF-8") ?>"
                                 minlength="8"
                                 autocomplete="new-password"
                                 required
                             >
-                            <button class="password-toggle" type="button" aria-label="แสดงรหัสผ่าน" aria-pressed="false" data-password-toggle="password">
+                            <button class="password-toggle" type="button" aria-label="<?= htmlspecialchars(t("Show password"), ENT_QUOTES, "UTF-8") ?>" aria-pressed="false" data-password-toggle="password">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path>
                                     <circle cx="12" cy="12" r="3"></circle>
@@ -631,7 +675,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
 
                     <div class="form-field">
-                        <label for="confirm-password">Confirm password</label>
+                        <label for="confirm-password"><?= htmlspecialchars(t("Confirm password"), ENT_QUOTES, "UTF-8") ?></label>
                         <div class="input-wrap">
                             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <rect x="4" y="10" width="16" height="11" rx="2.5"></rect>
@@ -641,12 +685,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                 id="confirm-password"
                                 type="password"
                                 name="confirm_password"
-                                placeholder="Enter your password again"
+                                placeholder="<?= htmlspecialchars(t("Enter your password again"), ENT_QUOTES, "UTF-8") ?>"
                                 minlength="8"
                                 autocomplete="new-password"
                                 required
                             >
-                            <button class="password-toggle" type="button" aria-label="แสดงรหัสผ่าน" aria-pressed="false" data-password-toggle="confirm-password">
+                            <button class="password-toggle" type="button" aria-label="<?= htmlspecialchars(t("Show password"), ENT_QUOTES, "UTF-8") ?>" aria-pressed="false" data-password-toggle="confirm-password">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path>
                                     <circle cx="12" cy="12" r="3"></circle>
@@ -656,7 +700,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
 
                     <button class="submit-button" type="submit">
-                        <span>Create Account</span>
+                        <span><?= htmlspecialchars(t("Create Account"), ENT_QUOTES, "UTF-8") ?></span>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M5 12h14"></path>
                             <path d="m13 6 6 6-6 6"></path>
@@ -665,12 +709,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </form>
 
                 <p class="login-prompt">
-                    Already have an account?
-                    <a class="text-link" href="login.php">Login</a>
+                    <?= htmlspecialchars(t("Already have an account?"), ENT_QUOTES, "UTF-8") ?>
+                    <a class="text-link" href="login.php"><?= htmlspecialchars(t("Login"), ENT_QUOTES, "UTF-8") ?></a>
                 </p>
             <?php endif; ?>
 
-            <p class="market-note">A little something for every part of your life.</p>
+            <p class="market-note"><?= htmlspecialchars(t("A little something for every part of your life."), ENT_QUOTES, "UTF-8") ?></p>
         </section>
     </main>
 
@@ -681,7 +725,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 const isVisible = password.type === "text";
                 password.type = isVisible ? "password" : "text";
                 toggle.setAttribute("aria-pressed", String(!isVisible));
-                toggle.setAttribute("aria-label", isVisible ? "แสดงรหัสผ่าน" : "ซ่อนรหัสผ่าน");
+                toggle.setAttribute("aria-label", isVisible
+                    ? <?= json_encode(t("Show password"), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>
+                    : <?= json_encode(t("Hide password"), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);
             });
         });
     </script>

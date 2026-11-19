@@ -1,6 +1,6 @@
 <?php
-require_once __DIR__ . "/security.php";
-require_once "db.php";
+require_once __DIR__ . "/includes/security.php";
+require_once __DIR__ . "/includes/db.php";
 
 $error = "";
 
@@ -39,7 +39,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             if (count($matchingUsers) === 1) {
                 $user = $matchingUsers[0];
-                if (session_regenerate_id(true)) {
+                if (!user_account_is_active($pdo, (int) $user["id"])) {
+                    $error = "บัญชีนี้ถูกระงับการใช้งาน";
+                } elseif (session_regenerate_id(true)) {
                     clear_login_failures($pdo, $attemptKey);
                     $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
                     $_SESSION["user_id"] = $user["id"];
@@ -62,12 +64,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 }
 ?>
 <!DOCTYPE html>
-<html lang="th">
+<html lang="<?= htmlspecialchars(app_language(), ENT_QUOTES, "UTF-8") ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fff7ed">
-    <title>เข้าสู่ระบบ | MARKETPLACE</title>
+    <title><?= htmlspecialchars(t("Login"), ENT_QUOTES, "UTF-8") ?> | MARKETPLACE</title>
     <style>
         :root {
             color-scheme: light;
@@ -628,18 +630,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     </style>
 </head>
 <body>
+<?= language_switcher() ?>
     <main class="stage">
         <div class="product-card product-card--bag" aria-hidden="true">
             <span class="product-emoji">👜</span>
-            <span class="product-info"><strong>Everyday tote</strong><span>฿ 890</span></span>
+            <span class="product-info">            <strong><?= htmlspecialchars(t("Everyday tote"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 890</span></span>
         </div>
         <div class="product-card product-card--headphones" aria-hidden="true">
             <span class="product-emoji">🎧</span>
-            <span class="product-info"><strong>Studio sound</strong><span>฿ 2,490</span></span>
+            <span class="product-info">            <strong><?= htmlspecialchars(t("Studio sound"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 2,490</span></span>
         </div>
         <div class="product-card product-card--sneakers" aria-hidden="true">
             <span class="product-emoji">👟</span>
-            <span class="product-info"><strong>Daily sneakers</strong><span>฿ 1,590</span></span>
+            <span class="product-info">            <strong><?= htmlspecialchars(t("Daily sneakers"), ENT_QUOTES, "UTF-8") ?></strong><span>฿ 1,590</span></span>
         </div>
 
         <section class="login-card" aria-labelledby="login-title">
@@ -654,20 +657,20 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
 
             <header class="intro">
-                <h1 id="login-title">Welcome back</h1>
-                <p>Discover. Shop. Enjoy.</p>
+                <h1 id="login-title"><?= htmlspecialchars(t("Welcome back"), ENT_QUOTES, "UTF-8") ?></h1>
+                <p><?= htmlspecialchars(t("Discover. Shop. Enjoy."), ENT_QUOTES, "UTF-8") ?></p>
             </header>
 
             <?php if ($error !== ""): ?>
                 <p class="error-message" role="alert">
-                    <?= htmlspecialchars($error, ENT_QUOTES, "UTF-8") ?>
+                    <?= htmlspecialchars(t($error), ENT_QUOTES, "UTF-8") ?>
                 </p>
             <?php endif; ?>
 
             <form method="POST" action="login.php">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, "UTF-8") ?>">
                 <div class="form-field">
-                    <label for="email">Email or Username</label>
+                    <label for="email"><?= htmlspecialchars(t("Email or Username"), ENT_QUOTES, "UTF-8") ?></label>
                     <div class="input-wrap">
                         <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <rect x="3" y="5" width="18" height="14" rx="3"></rect>
@@ -677,7 +680,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             id="email"
                             type="text"
                             name="email"
-                            placeholder="Enter your email or username"
+                            placeholder="<?= htmlspecialchars(t("Enter your email or username"), ENT_QUOTES, "UTF-8") ?>"
                             autocomplete="username"
                             value="<?= htmlspecialchars($_POST["email"] ?? "", ENT_QUOTES, "UTF-8") ?>"
                             required
@@ -686,7 +689,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </div>
 
                 <div class="form-field">
-                    <label for="password">Password</label>
+                    <label for="password"><?= htmlspecialchars(t("Password"), ENT_QUOTES, "UTF-8") ?></label>
                     <div class="input-wrap">
                         <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <rect x="4" y="10" width="16" height="11" rx="2.5"></rect>
@@ -696,11 +699,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             id="password"
                             type="password"
                             name="password"
-                            placeholder="Enter your password"
+                            placeholder="<?= htmlspecialchars(t("Enter your password"), ENT_QUOTES, "UTF-8") ?>"
                             autocomplete="current-password"
                             required
                         >
-                        <button class="password-toggle" type="button" aria-label="แสดงรหัสผ่าน" aria-pressed="false">
+                        <button class="password-toggle" type="button" aria-label="<?= htmlspecialchars(t("Show password"), ENT_QUOTES, "UTF-8") ?>" aria-pressed="false">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path>
                                 <circle cx="12" cy="12" r="3"></circle>
@@ -712,13 +715,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <div class="form-options">
                     <label class="remember">
                         <input type="checkbox" name="remember_me" value="1">
-                        <span>Remember me</span>
+                        <span><?= htmlspecialchars(t("Remember me"), ENT_QUOTES, "UTF-8") ?></span>
                     </label>
-                    <a class="text-link" href="#password-recovery" data-notice="Password recovery is not configured yet. Please contact the marketplace administrator.">Forgot Password?</a>
+                    <a class="text-link" href="#password-recovery" data-notice="<?= htmlspecialchars(t("Password recovery is not configured yet. Please contact the marketplace administrator."), ENT_QUOTES, "UTF-8") ?>"><?= htmlspecialchars(t("Forgot Password?"), ENT_QUOTES, "UTF-8") ?></a>
                 </div>
 
                 <button class="login-button" type="submit">
-                    <span>Login</span>
+                    <span><?= htmlspecialchars(t("Login"), ENT_QUOTES, "UTF-8") ?></span>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M5 12h14"></path>
                         <path d="m13 6 6 6-6 6"></path>
@@ -727,10 +730,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <p class="form-notice" id="form-notice" role="status" aria-live="polite"></p>
             </form>
 
-            <div class="divider"><span>Or continue with</span></div>
+            <div class="divider"><span><?= htmlspecialchars(t("Or continue with"), ENT_QUOTES, "UTF-8") ?></span></div>
 
-            <div class="social-buttons" aria-label="Social sign-in options">
-                <button class="social-button" type="button" data-provider="Google" data-notice="Google sign-in is not configured yet.">
+            <div class="social-buttons" aria-label="<?= htmlspecialchars(t("Social sign-in options"), ENT_QUOTES, "UTF-8") ?>">
+                <button class="social-button" type="button" data-provider="Google" data-notice="<?= htmlspecialchars(t("Google sign-in is not configured yet."), ENT_QUOTES, "UTF-8") ?>">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.39-.18-2.05H12v3.88h5.38a4.6 4.6 0 0 1-2 3.02v2.52h3.24c1.9-1.75 2.98-4.32 2.98-7.37Z"></path>
                         <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.4l-3.24-2.52c-.9.6-2.05.96-3.38.96-2.6 0-4.8-1.76-5.59-4.13H3.06v2.6A10 10 0 0 0 12 22Z"></path>
@@ -739,13 +742,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </svg>
                     <span>Google</span>
                 </button>
-                <button class="social-button" type="button" data-provider="Facebook" data-notice="Facebook sign-in is not configured yet.">
+                <button class="social-button" type="button" data-provider="Facebook" data-notice="<?= htmlspecialchars(t("Facebook sign-in is not configured yet."), ENT_QUOTES, "UTF-8") ?>">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path fill="#1877F2" d="M24 12a12 12 0 1 0-13.88 11.86v-8.4H7.08V12h3.04V9.36c0-3 1.79-4.66 4.52-4.66 1.31 0 2.68.23 2.68.23v2.95h-1.5c-1.48 0-1.94.92-1.94 1.87V12h3.3l-.53 3.46h-2.77v8.4A12 12 0 0 0 24 12Z"></path>
                     </svg>
                     <span>Facebook</span>
                 </button>
-                <button class="social-button" type="button" data-provider="Apple" data-notice="Apple sign-in is not configured yet.">
+                <button class="social-button" type="button" data-provider="Apple" data-notice="<?= htmlspecialchars(t("Apple sign-in is not configured yet."), ENT_QUOTES, "UTF-8") ?>">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path fill="currentColor" d="M16.37 12.33c.02 2.13 1.87 2.84 1.89 2.85-.02.05-.3 1.03-.98 2.03-.59.87-1.21 1.74-2.18 1.76-.95.02-1.26-.57-2.35-.57-1.1 0-1.44.55-2.33.59-.94.04-1.66-.94-2.26-1.8-1.23-1.78-2.17-5.04-.9-7.24a3.5 3.5 0 0 1 2.96-1.8c.92-.02 1.79.62 2.35.62.56 0 1.62-.77 2.73-.66.47.02 1.8.19 2.66 1.44-.07.04-1.59.93-1.58 2.78Zm-1.8-6.02c.5-.6.83-1.43.74-2.26-.72.03-1.58.48-2.1 1.08-.46.53-.87 1.38-.76 2.19.8.06 1.62-.41 2.12-1.01Z"></path>
                     </svg>
@@ -754,10 +757,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
 
             <p class="register-prompt">
-                Don't have an account?
-                <a class="text-link" href="register.php">Create Account</a>
+                <?= htmlspecialchars(t("Don't have an account?"), ENT_QUOTES, "UTF-8") ?>
+                <a class="text-link" href="register.php"><?= htmlspecialchars(t("Create Account"), ENT_QUOTES, "UTF-8") ?></a>
             </p>
-            <p class="market-note">A little something for every part of your life.</p>
+            <p class="market-note"><?= htmlspecialchars(t("A little something for every part of your life."), ENT_QUOTES, "UTF-8") ?></p>
         </section>
     </main>
 
@@ -770,7 +773,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             const isVisible = passwordInput.type === "text";
             passwordInput.type = isVisible ? "password" : "text";
             passwordToggle.setAttribute("aria-pressed", String(!isVisible));
-            passwordToggle.setAttribute("aria-label", isVisible ? "แสดงรหัสผ่าน" : "ซ่อนรหัสผ่าน");
+            passwordToggle.setAttribute("aria-label", isVisible
+                ? <?= json_encode(t("Show password"), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>
+                : <?= json_encode(t("Hide password"), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);
         });
 
         document.querySelectorAll("[data-notice]").forEach((control) => {

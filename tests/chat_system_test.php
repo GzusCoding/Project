@@ -143,7 +143,10 @@ try {
     }
     $createdTemporaryRoot = true;
     $migrationPath = $temporaryRoot . DIRECTORY_SEPARATOR . "migrate_chat_messages.php";
-    if (!copy($projectRoot . DIRECTORY_SEPARATOR . "migrate_chat_messages.php", $migrationPath)) {
+    if (!copy(
+        $projectRoot . DIRECTORY_SEPARATOR . "migrations" . DIRECTORY_SEPARATOR . "migrate_chat_messages.php",
+        $migrationPath
+    )) {
         throw new RuntimeException("Could not copy the chat migration into the disposable directory.");
     }
 
@@ -283,6 +286,8 @@ try {
             && $pdo->query("PRAGMA foreign_key_check")->fetchAll(PDO::FETCH_ASSOC) === [],
         "The migrated disposable database failed integrity or foreign-key checks."
     );
+    $pdo->exec("ALTER TABLE chat_messages ADD COLUMN image_storage_key TEXT NULL");
+    $pdo->exec("ALTER TABLE chat_messages ADD COLUMN image_mime_type TEXT NULL");
     $pdo->exec("PRAGMA foreign_keys = ON");
     $pdo->exec("SAVEPOINT chat_constraint");
     try {
@@ -360,18 +365,48 @@ try {
     }
     chat_test_assert($ready, "The local PHP server did not become ready.");
 
+    [$chatListStatus, $chatListBody] = chat_test_request(
+        $baseUrl,
+        "/my_chats.php",
+        $sessions[1]
+    );
+    [$otherChatListStatus, $otherChatListBody] = chat_test_request(
+        $baseUrl,
+        "/my_chats.php",
+        $sessions[3]
+    );
+    [$guestChatListStatus, , $guestChatListHeaders] = chat_test_request(
+        $baseUrl,
+        "/my_chats.php",
+        null
+    );
+    chat_test_assert(
+        $chatListStatus === 200
+            && str_contains($chatListBody, "รายการแลกเปลี่ยน #1")
+            && str_contains($chatListBody, 'href="exchange_transaction.php?id=1"')
+            && $otherChatListStatus === 200
+            && str_contains($otherChatListBody, 'href="exchange_transaction.php?id=2"')
+            && !str_contains($otherChatListBody, 'href="exchange_transaction.php?id=1"')
+            && $guestChatListStatus === 302
+            && in_array("Location: login.php", $guestChatListHeaders, true),
+        "The chat inbox was unavailable, exposed another participant's room, or allowed a guest."
+    );
+
     $userOneSession = $sessions[1];
     $userTwoSession = $sessions[2];
     $userThreeSession = $sessions[3];
     [$pageStatus, $page] = chat_test_request(
         $baseUrl,
-        "/exchange_transaction.php?id=1",
+        "/exchange_transaction.php?id=1&lang=en",
         $userOneSession
     );
     chat_test_assert(
         $pageStatus === 200
             && str_contains($page, "Transaction chat")
             && str_contains($page, "Recipient")
+            && str_contains($page, 'name="image_file"')
+            && str_contains($page, "image/webp")
+            && str_contains($page, 'const actionUrl = form.getAttribute("action");')
             && !str_contains($page, '<img src=x onerror=alert(1)> Creator'),
         "The transaction page did not safely render the chat and participant details ({$pageStatus}): "
             . substr($page, 0, 500) . "\n" . (string) file_get_contents($serverLog)
@@ -454,6 +489,16 @@ try {
     chat_test_assert(
         $secondStatus === 201 && (int) $second["message"]["sender_id"] === 2,
         "The second transaction participant could not send as themselves."
+    );
+    [$updatedChatListStatus, $updatedChatListBody] = chat_test_request(
+        $baseUrl,
+        "/my_chats.php",
+        $sessions[1]
+    );
+    chat_test_assert(
+        $updatedChatListStatus === 200
+            && str_contains($updatedChatListBody, "Reply from recipient"),
+        "The chat inbox did not show the latest message."
     );
     [$retrievalStatus, $retrievalBody] = chat_test_request(
         $baseUrl,
